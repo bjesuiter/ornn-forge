@@ -1,0 +1,32 @@
+{
+  "name": "ornn-forge",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "env:ops": "DEV_ENV=ops varlock load",
+    "deploy": "bun run build && DEV_ENV=ops varlock run -- wrangler deploy",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "latest",
+    "@tanstack/react-start": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@varlock/bitwarden-plugin": "^2.0.0",
+    "@vitejs/plugin-react": "latest",
+    "typescript": "latest",
+    "varlock": "^1.10.0",
+    "vite": "latest",
+    "wrangler": "latest"
+  }
+}

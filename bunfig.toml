@@ -1,0 +1,2 @@
+# Varlock owns environment loading for wrapped commands.
+env = false
