@@ -1,0 +1,1240 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ornn coordinator prototype</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #171914;
+        --muted: #62675d;
+        --line: #d9ddd2;
+        --paper: #f5f3eb;
+        --panel: #fffef9;
+        --accent: #bd4b25;
+        --accent-soft: #f5ded4;
+        --good: #28724b;
+        --good-soft: #dceee2;
+        --warn: #9b651d;
+        --warn-soft: #f6e9cf;
+        --bad: #9e3030;
+        --bad-soft: #f4dada;
+        --blue: #335f82;
+        --blue-soft: #dbe9f3;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: var(--sans);
+        line-height: 1.5;
+      }
+
+      button {
+        color: inherit;
+        font: inherit;
+      }
+
+      .page {
+        width: min(1240px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 48px 0 80px;
+      }
+
+      .eyebrow {
+        margin: 0 0 10px;
+        color: var(--accent);
+        font: 700 12px/1.2 var(--mono);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        max-width: 850px;
+        margin-bottom: 16px;
+        font-size: clamp(38px, 6vw, 72px);
+        font-weight: 760;
+        letter-spacing: -0.055em;
+        line-height: 0.98;
+      }
+
+      h2 {
+        margin-bottom: 16px;
+        font-size: 21px;
+        letter-spacing: -0.025em;
+      }
+
+      h3 {
+        margin-bottom: 8px;
+        font-size: 15px;
+      }
+
+      .lede {
+        max-width: 780px;
+        margin-bottom: 28px;
+        color: var(--muted);
+        font-size: 18px;
+      }
+
+      .settled {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 1px;
+        overflow: hidden;
+        margin-bottom: 40px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: var(--line);
+      }
+
+      .settled div {
+        min-height: 92px;
+        padding: 18px;
+        background: var(--panel);
+      }
+
+      .settled small {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--muted);
+        font: 700 11px/1.2 var(--mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.45fr) minmax(300px, 0.75fr);
+        gap: 24px;
+        align-items: start;
+      }
+
+      .stack {
+        display: grid;
+        gap: 24px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: var(--panel);
+        box-shadow: 0 8px 28px rgb(41 43 36 / 5%);
+      }
+
+      .panel-head {
+        display: flex;
+        gap: 16px;
+        align-items: flex-start;
+        justify-content: space-between;
+        padding: 22px 22px 0;
+      }
+
+      .panel-body {
+        padding: 22px;
+      }
+
+      .topology-picker {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-top: 8px;
+      }
+
+      .topology-button {
+        min-height: 94px;
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #faf9f3;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .topology-button:hover {
+        border-color: #a6aa9f;
+      }
+
+      .topology-button[aria-pressed="true"] {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+        box-shadow: inset 0 0 0 1px var(--accent);
+      }
+
+      .topology-button strong,
+      .topology-button span {
+        display: block;
+      }
+
+      .topology-button strong {
+        margin-bottom: 7px;
+        font-size: 14px;
+      }
+
+      .topology-button span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .state-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .state-card {
+        min-height: 92px;
+        padding: 13px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #faf9f4;
+      }
+
+      .state-card small {
+        display: block;
+        margin-bottom: 9px;
+        color: var(--muted);
+        font: 700 10px/1.2 var(--mono);
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+
+      .state-card strong {
+        display: block;
+        font-size: 14px;
+        line-height: 1.3;
+      }
+
+      .state-card.wide {
+        grid-column: span 2;
+      }
+
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+      }
+
+      .status::before {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--good);
+        content: "";
+      }
+
+      .status.down::before {
+        background: var(--bad);
+      }
+
+      .last-change {
+        margin: 14px 0 0;
+        padding: 12px 14px;
+        border-left: 3px solid var(--accent);
+        background: var(--accent-soft);
+        font-size: 13px;
+      }
+
+      .button-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .action {
+        min-height: 46px;
+        padding: 9px 11px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: #fff;
+        font-size: 12px;
+        font-weight: 650;
+        cursor: pointer;
+      }
+
+      .action:hover:not(:disabled) {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      .action:disabled {
+        cursor: not-allowed;
+        opacity: 0.42;
+      }
+
+      .action.primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: white;
+      }
+
+      .action.risk {
+        border-color: #d7b07a;
+        background: var(--warn-soft);
+      }
+
+      .action.reset {
+        border-style: dashed;
+      }
+
+      .subhead {
+        margin: 20px 0 10px;
+        color: var(--muted);
+        font: 700 11px/1.2 var(--mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        padding-bottom: 4px;
+      }
+
+      .tab {
+        flex: 0 0 auto;
+        padding: 8px 11px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: transparent;
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      .tab[aria-selected="true"] {
+        border-color: var(--ink);
+        background: var(--ink);
+        color: white;
+      }
+
+      .walkthrough {
+        margin-top: 16px;
+        padding: 16px;
+        border-radius: 12px;
+        background: #efeee7;
+      }
+
+      .walkthrough p {
+        margin-bottom: 14px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .steps {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .step {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 8px 11px 8px 8px;
+        border: 1px solid #c8cbbf;
+        border-radius: 9px;
+        background: white;
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      .step span {
+        display: grid;
+        width: 22px;
+        height: 22px;
+        place-items: center;
+        border-radius: 6px;
+        background: var(--ink);
+        color: white;
+        font: 700 10px/1 var(--mono);
+      }
+
+      .step.done {
+        border-color: #a7cbb5;
+        background: var(--good-soft);
+      }
+
+      .step.next {
+        border-color: var(--accent);
+        box-shadow: inset 0 0 0 1px var(--accent);
+      }
+
+      .step:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      .log-list {
+        display: grid;
+        gap: 7px;
+        max-height: 290px;
+        overflow: auto;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .log-item {
+        display: grid;
+        grid-template-columns: 28px minmax(100px, 0.36fr) 1fr;
+        gap: 10px;
+        align-items: baseline;
+        padding: 9px 10px;
+        border-radius: 8px;
+        background: #f4f3ed;
+        font-size: 12px;
+      }
+
+      .log-item code {
+        color: var(--accent);
+        font-family: var(--mono);
+        font-size: 10px;
+      }
+
+      .log-item span:last-child {
+        color: var(--muted);
+      }
+
+      .empty {
+        padding: 24px;
+        border: 1px dashed var(--line);
+        border-radius: 10px;
+        color: var(--muted);
+        text-align: center;
+        font-size: 13px;
+      }
+
+      .facts {
+        display: grid;
+        gap: 10px;
+        margin: 0;
+      }
+
+      .fact {
+        padding: 13px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+      }
+
+      .fact dt {
+        margin-bottom: 5px;
+        color: var(--muted);
+        font: 700 10px/1.2 var(--mono);
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+
+      .fact dd {
+        margin: 0;
+        font-size: 13px;
+      }
+
+      .verdict {
+        padding: 16px;
+        border-radius: 12px;
+        background: var(--good-soft);
+      }
+
+      .verdict.warn {
+        background: var(--warn-soft);
+      }
+
+      .verdict.bad {
+        background: var(--bad-soft);
+      }
+
+      .verdict strong {
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      .verdict p {
+        margin: 0;
+        font-size: 13px;
+      }
+
+      .comparison {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+
+      .comparison th,
+      .comparison td {
+        padding: 11px 9px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      .comparison th {
+        color: var(--muted);
+        font: 700 10px/1.2 var(--mono);
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+      }
+
+      .comparison tr.selected td {
+        background: var(--accent-soft);
+      }
+
+      .tag {
+        display: inline-block;
+        padding: 3px 7px;
+        border-radius: 999px;
+        background: var(--blue-soft);
+        color: var(--blue);
+        font: 700 10px/1.2 var(--mono);
+      }
+
+      footer {
+        margin-top: 28px;
+        color: var(--muted);
+        font: 12px/1.5 var(--mono);
+      }
+
+      @media (max-width: 900px) {
+        .settled,
+        .topology-picker {
+          grid-template-columns: 1fr;
+        }
+
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .state-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .side {
+          order: -1;
+        }
+      }
+
+      @media (max-width: 560px) {
+        .page {
+          width: min(100% - 20px, 1240px);
+          padding-top: 28px;
+        }
+
+        .button-grid,
+        .state-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .state-card.wide {
+          grid-column: auto;
+        }
+
+        .log-item {
+          grid-template-columns: 24px 1fr;
+        }
+
+        .log-item span:last-child {
+          grid-column: 2;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <p class="eyebrow">Throwaway logic prototype</p>
+      <h1>Does a job still need a Durable Object?</h1>
+      <p class="lede">
+        Drive the same Ornn job through three coordinator designs. Watch who accepts each event,
+        who owns the timer, and what must recover after a crash.
+      </p>
+
+      <section class="settled" aria-label="Decisions already made">
+        <div><small>Workflow engine</small>TanStack Workflow, if the integration tests pass</div>
+        <div><small>Job record</small>Ornn-owned D1 tables stay authoritative</div>
+        <div><small>Artifacts</small>R2 with a tested Garage-compatible contract</div>
+        <div><small>Diagnostics</small>Workers Observability, separate from the job record</div>
+      </section>
+
+      <div class="layout">
+        <div class="stack">
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">1 · Pick a design</p>
+                <h2>Coordinator topology</h2>
+              </div>
+              <button class="action reset" id="reset">Reset job</button>
+            </div>
+            <div class="panel-body">
+              <div class="topology-picker" id="topology-picker"></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">2 · Watch the model</p>
+                <h2>Current job state</h2>
+              </div>
+              <span class="tag" id="authority-count"></span>
+            </div>
+            <div class="panel-body">
+              <div class="state-grid" id="state-grid"></div>
+              <p class="last-change" id="last-change"></p>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">3 · Try any order</p>
+                <h2>Free play</h2>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="button-grid" id="job-actions"></div>
+              <p class="subhead">Faults and recovery</p>
+              <div class="button-grid" id="fault-actions"></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">4 · Reproduce hard cases</p>
+                <h2>Guided walkthroughs</h2>
+              </div>
+            </div>
+            <div class="panel-body">
+              <div class="tabs" id="tabs" role="tablist"></div>
+              <div class="walkthrough" id="walkthrough"></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Authoritative record</p>
+                <h2>D1 job event timeline</h2>
+              </div>
+            </div>
+            <div class="panel-body">
+              <ol class="log-list" id="ledger"></ol>
+            </div>
+          </section>
+        </div>
+
+        <aside class="stack side">
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">What this design means</p>
+                <h2 id="topology-name"></h2>
+              </div>
+            </div>
+            <div class="panel-body">
+              <dl class="facts" id="topology-facts"></dl>
+              <div id="verdict" style="margin-top: 14px"></div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Side by side</p>
+                <h2>Structural cost</h2>
+              </div>
+            </div>
+            <div class="panel-body" style="padding-top: 8px; overflow-x: auto">
+              <table class="comparison">
+                <thead>
+                  <tr>
+                    <th>Design</th>
+                    <th>Durable records</th>
+                    <th>Timer</th>
+                  </tr>
+                </thead>
+                <tbody id="comparison"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">What would justify a DO</p>
+                <h2>Decision rule</h2>
+              </div>
+            </div>
+            <div class="panel-body">
+              <p style="font-size: 13px; margin-bottom: 10px">
+                Keep a per-job Durable Object only if it owns a job that TanStack and D1 cannot do
+                safely.
+              </p>
+              <ul style="padding-left: 20px; margin: 0; color: var(--muted); font-size: 13px">
+                <li>One live runner connection needs a stable owner.</li>
+                <li>D1 leases cannot settle a measured event race safely.</li>
+                <li>A sub-minute job alarm cannot use the TanStack host.</li>
+              </ul>
+            </div>
+          </section>
+        </aside>
+      </div>
+
+      <footer>
+        PROTOTYPE ONLY. This page models ownership and failure cases. It does not contain production
+        TanStack Workflow or Durable Object code.
+      </footer>
+    </main>
+
+    <script>
+      const JobModel = (() => {
+        const topologies = {
+          tanstack: {
+            id: "tanstack",
+            shortName: "TanStack + D1",
+            name: "TanStack Workflow with D1",
+            summary: "No per-job Durable Object",
+            records: ["Ornn job ledger", "TanStack runtime store"],
+            coordination: "TanStack execution lease plus conditional D1 job updates",
+            timer: "TanStack timer row, woken by a scheduled Worker",
+            recovery: "TanStack rebuilds execution from its events. Ornn rebuilds the job from its own events.",
+            exit: "Replace the workflow adapter. Ornn job records do not change.",
+            verdict: "preferred",
+            verdictText:
+              "Start here. It gives one workflow engine one timer and keeps the Ornn job ledger separate. Add a Durable Object only after a failing test proves this design cannot coordinate a real job event.",
+          },
+          combined: {
+            id: "combined",
+            shortName: "TanStack + DO",
+            name: "TanStack Workflow plus a job Durable Object",
+            summary: "Durable Object gates every command",
+            records: ["Ornn job ledger", "TanStack runtime store", "Durable Object state"],
+            coordination: "Durable Object orders commands, then TanStack leases execution",
+            timer: "TanStack owns timers. A second DO alarm would create two clocks.",
+            recovery:
+              "The job may need to repair the DO-to-TanStack handoff before either runtime can finish recovery.",
+            exit: "Remove the DO gate and migrate any buffered commands, or remove TanStack and rewrite execution.",
+            verdict: "avoid",
+            verdictText:
+              "No first-slice need is proven. This adds another durable record and a cross-service handoff while D1 and TanStack already reject duplicate work.",
+          },
+          durableObject: {
+            id: "durableObject",
+            shortName: "DO + D1",
+            name: "Ornn-owned Durable Object with D1",
+            summary: "No TanStack runtime",
+            records: ["Ornn job ledger", "Durable Object state"],
+            coordination: "One single-threaded Durable Object orders commands",
+            timer: "One Durable Object alarm",
+            recovery: "The Durable Object rebuilds its cache and next alarm from Ornn job events.",
+            exit: "Replace the coordinator and rebuild it from D1. Ornn must own retry and replay logic.",
+            verdict: "fallback",
+            verdictText:
+              "Keep this as the fallback if TanStack fails crash or version tests. It has a clear ownership model, but Ornn must build workflow behavior that TanStack already supplies.",
+          },
+        };
+
+        const activeStates = new Set(["queued", "running"]);
+
+        function createState(topologyId = "tanstack") {
+          return {
+            topologyId,
+            job: "absent",
+            runtime: "idle",
+            timer: "none",
+            deliveryIds: [],
+            runnerEffects: 0,
+            ledger: [],
+            pending: null,
+            crashNextWrite: false,
+            coordinatorUp: true,
+            d1Up: true,
+            telemetryUp: true,
+            telemetrySent: 0,
+            telemetryDropped: 0,
+            lastChange: "Choose a walkthrough or accept an invocation.",
+          };
+        }
+
+        function update(state, action) {
+          if (action.type === "RESET") return createState(state.topologyId);
+
+          let next = clone(state);
+          const topology = topologies[next.topologyId];
+
+          if (action.type === "D1_DOWN") {
+            next.d1Up = false;
+            return note(next, "D1 is unavailable. Authoritative job changes must wait.");
+          }
+          if (action.type === "D1_UP") {
+            next.d1Up = true;
+            return note(next, "D1 is available again. A buffered callback can now be retried.");
+          }
+          if (action.type === "COORDINATOR_DOWN") {
+            next.coordinatorUp = false;
+            return note(next, topology.name + " is unavailable. New job commands must wait.");
+          }
+          if (action.type === "RECOVER") return recover(next, topology);
+          if (action.type === "TELEMETRY_DOWN") {
+            next.telemetryUp = false;
+            return note(next, "Workers Observability is unavailable. Job execution is unchanged.", false);
+          }
+          if (action.type === "TELEMETRY_UP") {
+            next.telemetryUp = true;
+            return note(next, "Workers Observability is available again.", false);
+          }
+          if (action.type === "CRASH_NEXT_WRITE") {
+            next.crashNextWrite = true;
+            return note(next, "The next terminal result will crash before the Ornn ledger commit.");
+          }
+
+          if (!next.coordinatorUp) {
+            return note(next, "Command refused because the coordinator is unavailable.");
+          }
+
+          switch (action.type) {
+            case "INVOKE":
+              return invoke(next, "delivery-100");
+            case "DUPLICATE_INVOKE":
+              return invoke(next, "delivery-100");
+            case "START":
+              return start(next);
+            case "FINISH":
+              return finish(next, topology, false);
+            case "RETRY_FINISH":
+              return finish(next, topology, true);
+            case "CANCEL":
+              return settle(next, topology, "cancelled", "job.cancelled", "Cancellation won the terminal race.");
+            case "TIMEOUT":
+              return settle(next, topology, "timed out", "job.timed_out", "The job deadline expired.");
+            default:
+              return note(next, "Unknown action ignored.");
+          }
+        }
+
+        function invoke(state, deliveryId) {
+          if (state.deliveryIds.includes(deliveryId)) {
+            return note(state, "Duplicate GitHub delivery rejected. No second job was created.");
+          }
+          if (!state.d1Up) return note(state, "Invocation paused because D1 cannot record it.");
+          if (state.job !== "absent") return note(state, "Invocation ignored because this model already has a job.");
+
+          state.deliveryIds.push(deliveryId);
+          state.job = "queued";
+          state.runtime = "ready";
+          append(state, "invocation.accepted", deliveryId + " created one job");
+          append(state, "job.queued", "Work order is ready for execution");
+          return note(state, "Invocation accepted. D1 now contains the authoritative job.");
+        }
+
+        function start(state) {
+          if (!state.d1Up) return note(state, "Start paused because D1 cannot record the transition.");
+          if (state.job !== "queued") return note(state, "Start ignored. Only a queued job can start.");
+
+          state.job = "running";
+          state.runtime = "running";
+          state.timer = "armed";
+          state.runnerEffects += 1;
+          append(state, "job.started", "Runner attempt " + state.runnerEffects + " received the work order");
+          return note(state, "The job started and its timeout is armed.");
+        }
+
+        function finish(state, topology, isRetry) {
+          if (state.pending && !state.d1Up) {
+            return note(state, "The runner callback remains buffered because D1 is unavailable.");
+          }
+          if (state.pending && state.d1Up) return recover(state, topology);
+          if (!activeStates.has(state.job)) {
+            return note(state, isRetry ? "Repeated runner callback rejected." : "Runner result rejected. The job is already terminal.");
+          }
+          if (!state.d1Up) {
+            if (topology.id === "tanstack") {
+              return note(state, "TanStack cannot persist the result because its D1 store is unavailable.");
+            }
+            state.pending = { state: "completed", event: "job.completed", detail: "Runner returned artifact sha256:a91f" };
+            return note(state, "The Durable Object buffered the callback, but the job remains running until D1 accepts it.");
+          }
+          if (state.crashNextWrite) {
+            state.crashNextWrite = false;
+            state.coordinatorUp = false;
+            state.pending = { state: "completed", event: "job.completed", detail: "Runner returned artifact sha256:a91f" };
+            state.runtime = topology.id === "combined" ? "handoff pending" : "result stored";
+            return note(state, crashText(topology));
+          }
+          return settle(state, topology, "completed", "job.completed", "Runner returned artifact sha256:a91f");
+        }
+
+        function settle(state, topology, jobState, event, detail) {
+          if (!activeStates.has(state.job)) return note(state, event + " rejected because " + state.job + " already won.");
+          if (!state.d1Up) return note(state, event + " paused because D1 cannot commit the authoritative event.");
+
+          state.job = jobState;
+          state.runtime = jobState;
+          state.timer = "cleared";
+          state.pending = null;
+          append(state, event, detail);
+          return note(state, detail + " Later terminal commands will be rejected.");
+        }
+
+        function recover(state, topology) {
+          state.coordinatorUp = true;
+          if (!state.pending) return note(state, topology.name + " restarted from durable records. No handoff was pending.");
+          if (!state.d1Up) return note(state, "Coordinator restarted, but D1 is still unavailable. The result remains pending.");
+          if (!activeStates.has(state.job)) {
+            state.pending = null;
+            return note(state, "Pending result dropped because another terminal event already won.");
+          }
+
+          const pending = state.pending;
+          state.runtime = "recovering";
+          return settle(state, topology, pending.state, pending.event, "Recovery committed the stored runner result.");
+        }
+
+        function crashText(topology) {
+          if (topology.id === "tanstack") {
+            return "TanStack stored the step result, then crashed before Ornn recorded job completion. Recovery must close that handoff.";
+          }
+          if (topology.id === "combined") {
+            return "The Durable Object stored the command, then crashed before TanStack and the Ornn ledger agreed. Recovery crosses three records.";
+          }
+          return "The Durable Object stored the result, then crashed before D1 recorded completion. It must rebuild and finish the write.";
+        }
+
+        function append(state, event, detail) {
+          state.ledger.push({ n: state.ledger.length + 1, event, detail });
+        }
+
+        function note(state, message, emitDiagnostic = true) {
+          state.lastChange = message;
+          if (emitDiagnostic) {
+            if (state.telemetryUp) state.telemetrySent += 1;
+            else state.telemetryDropped += 1;
+          }
+          return state;
+        }
+
+        function clone(state) {
+          return {
+            ...state,
+            deliveryIds: [...state.deliveryIds],
+            ledger: state.ledger.map((entry) => ({ ...entry })),
+            pending: state.pending ? { ...state.pending } : null,
+          };
+        }
+
+        return { createState, topologies, update };
+      })();
+
+      const jobActions = [
+        ["INVOKE", "Accept invocation", "primary"],
+        ["DUPLICATE_INVOKE", "Repeat same delivery", ""],
+        ["START", "Start runner", ""],
+        ["FINISH", "Runner reports success", ""],
+        ["RETRY_FINISH", "Retry runner callback", ""],
+        ["CANCEL", "Request cancellation", ""],
+        ["TIMEOUT", "Fire timeout", "risk"],
+      ];
+
+      const faultActions = [
+        ["CRASH_NEXT_WRITE", "Crash before next ledger write", "risk"],
+        ["COORDINATOR_DOWN", "Stop coordinator", "risk"],
+        ["RECOVER", "Restart coordinator", ""],
+        ["D1_DOWN", "Make D1 unavailable", "risk"],
+        ["D1_UP", "Restore D1", ""],
+        ["TELEMETRY_DOWN", "Stop observability", "risk"],
+        ["TELEMETRY_UP", "Restore observability", ""],
+      ];
+
+      const scenarios = [
+        {
+          id: "duplicate",
+          name: "Duplicate invocation",
+          text: "GitHub delivers the same invocation twice. Watch D1 create one job and reject the duplicate before any runner work starts.",
+          steps: [
+            ["INVOKE", "Accept invocation"],
+            ["DUPLICATE_INVOKE", "Repeat delivery"],
+            ["START", "Start runner"],
+          ],
+        },
+        {
+          id: "finish-race",
+          name: "Finish wins",
+          text: "The runner result reaches the coordinator just before cancellation. The first D1 terminal event wins.",
+          steps: [
+            ["INVOKE", "Accept invocation"],
+            ["START", "Start runner"],
+            ["FINISH", "Accept result"],
+            ["CANCEL", "Receive cancellation"],
+          ],
+        },
+        {
+          id: "cancel-race",
+          name: "Cancel wins",
+          text: "Cancellation commits first. A late runner callback cannot change the terminal job state.",
+          steps: [
+            ["INVOKE", "Accept invocation"],
+            ["START", "Start runner"],
+            ["CANCEL", "Accept cancellation"],
+            ["FINISH", "Receive late result"],
+          ],
+        },
+        {
+          id: "write-crash",
+          name: "Write crash",
+          text: "The coordinator sees a successful result but stops before Ornn records completion. Compare how many durable records recovery must inspect.",
+          steps: [
+            ["INVOKE", "Accept invocation"],
+            ["START", "Start runner"],
+            ["CRASH_NEXT_WRITE", "Arm crash"],
+            ["FINISH", "Receive result"],
+            ["RECOVER", "Restart and recover"],
+          ],
+        },
+        {
+          id: "d1-outage",
+          name: "D1 outage",
+          text: "D1 is authoritative, so no design can finish the job while it is down. A Durable Object can buffer the callback, but that creates another record to repair.",
+          steps: [
+            ["INVOKE", "Accept invocation"],
+            ["START", "Start runner"],
+            ["D1_DOWN", "Stop D1"],
+            ["FINISH", "Receive result"],
+            ["D1_UP", "Restore D1"],
+            ["RETRY_FINISH", "Retry result"],
+          ],
+        },
+        {
+          id: "telemetry",
+          name: "Telemetry outage",
+          text: "Workers Observability disappears during the job. The durable job record must still complete without waiting for diagnostics.",
+          steps: [
+            ["INVOKE", "Accept invocation"],
+            ["TELEMETRY_DOWN", "Stop observability"],
+            ["START", "Start runner"],
+            ["FINISH", "Accept result"],
+            ["TELEMETRY_UP", "Restore observability"],
+          ],
+        },
+      ];
+
+      let state = JobModel.createState();
+      let scenarioId = scenarios[0].id;
+      let scenarioStep = 0;
+
+      const elements = {
+        topologyPicker: document.querySelector("#topology-picker"),
+        stateGrid: document.querySelector("#state-grid"),
+        lastChange: document.querySelector("#last-change"),
+        authorityCount: document.querySelector("#authority-count"),
+        jobActions: document.querySelector("#job-actions"),
+        faultActions: document.querySelector("#fault-actions"),
+        tabs: document.querySelector("#tabs"),
+        walkthrough: document.querySelector("#walkthrough"),
+        ledger: document.querySelector("#ledger"),
+        topologyName: document.querySelector("#topology-name"),
+        topologyFacts: document.querySelector("#topology-facts"),
+        verdict: document.querySelector("#verdict"),
+        comparison: document.querySelector("#comparison"),
+        reset: document.querySelector("#reset"),
+      };
+
+      function dispatch(type) {
+        state = JobModel.update(state, { type });
+        render();
+      }
+
+      function pickTopology(topologyId) {
+        state = JobModel.createState(topologyId);
+        scenarioStep = 0;
+        render();
+      }
+
+      function chooseScenario(nextScenarioId) {
+        scenarioId = nextScenarioId;
+        scenarioStep = 0;
+        state = JobModel.createState(state.topologyId);
+        render();
+      }
+
+      function runStep(index, action) {
+        if (index !== scenarioStep) return;
+        dispatch(action);
+        scenarioStep += 1;
+        render();
+      }
+
+      function render() {
+        const topology = JobModel.topologies[state.topologyId];
+        renderTopologyPicker();
+        renderState(topology);
+        renderActions();
+        renderWalkthrough();
+        renderLedger();
+        renderFacts(topology);
+        renderComparison();
+      }
+
+      function renderTopologyPicker() {
+        elements.topologyPicker.innerHTML = Object.values(JobModel.topologies)
+          .map(
+            (topology) => `
+              <button class="topology-button" data-topology="${topology.id}" aria-pressed="${topology.id === state.topologyId}">
+                <strong>${topology.shortName}</strong>
+                <span>${topology.summary}</span>
+              </button>`,
+          )
+          .join("");
+        elements.topologyPicker.querySelectorAll("button").forEach((button) => {
+          button.addEventListener("click", () => pickTopology(button.dataset.topology));
+        });
+      }
+
+      function renderState(topology) {
+        const cards = [
+          ["Job", state.job],
+          ["Execution runtime", state.runtime],
+          ["Timeout", state.timer],
+          ["Runner side effects", String(state.runnerEffects)],
+          ["Coordinator", status(state.coordinatorUp)],
+          ["D1", status(state.d1Up)],
+          ["Workers Observability", status(state.telemetryUp)],
+          ["Diagnostics", state.telemetrySent + " sent · " + state.telemetryDropped + " dropped"],
+          ["Pending handoff", state.pending ? state.pending.event : "none", "wide"],
+          ["Recovery source", state.pending ? topology.recovery : "no recovery pending", "wide"],
+        ];
+
+        elements.stateGrid.innerHTML = cards
+          .map(
+            ([label, value, className = ""]) => `
+              <div class="state-card ${className}">
+                <small>${label}</small>
+                <strong>${value}</strong>
+              </div>`,
+          )
+          .join("");
+        elements.lastChange.textContent = state.lastChange;
+        elements.authorityCount.textContent = topology.records.length + " durable records";
+      }
+
+      function status(isUp) {
+        return `<span class="status ${isUp ? "" : "down"}">${isUp ? "available" : "unavailable"}</span>`;
+      }
+
+      function renderActions() {
+        elements.jobActions.innerHTML = actionButtons(jobActions);
+        elements.faultActions.innerHTML = actionButtons(faultActions);
+        document.querySelectorAll("[data-action]").forEach((button) => {
+          button.addEventListener("click", () => dispatch(button.dataset.action));
+        });
+      }
+
+      function actionButtons(actions) {
+        return actions
+          .map(
+            ([type, label, className]) =>
+              `<button class="action ${className}" data-action="${type}">${label}</button>`,
+          )
+          .join("");
+      }
+
+      function renderWalkthrough() {
+        elements.tabs.innerHTML = scenarios
+          .map(
+            (scenario) => `
+              <button class="tab" role="tab" data-scenario="${scenario.id}" aria-selected="${scenario.id === scenarioId}">
+                ${scenario.name}
+              </button>`,
+          )
+          .join("");
+        elements.tabs.querySelectorAll("button").forEach((button) => {
+          button.addEventListener("click", () => chooseScenario(button.dataset.scenario));
+        });
+
+        const scenario = scenarios.find((item) => item.id === scenarioId);
+        const steps = scenario.steps
+          .map(([action, label], index) => {
+            const stateClass = index < scenarioStep ? "done" : index === scenarioStep ? "next" : "";
+            return `
+              <button class="step ${stateClass}" data-step="${index}" data-step-action="${action}" ${index > scenarioStep ? "disabled" : ""}>
+                <span>${index + 1}</span>${label}
+              </button>`;
+          })
+          .join("");
+
+        elements.walkthrough.innerHTML = `<p>${scenario.text}</p><div class="steps">${steps}</div>`;
+        elements.walkthrough.querySelectorAll("[data-step]").forEach((button) => {
+          button.addEventListener("click", () => runStep(Number(button.dataset.step), button.dataset.stepAction));
+        });
+      }
+
+      function renderLedger() {
+        if (state.ledger.length === 0) {
+          elements.ledger.innerHTML = '<li class="empty">No authoritative job events yet.</li>';
+          return;
+        }
+        elements.ledger.innerHTML = state.ledger
+          .map(
+            (entry) => `
+              <li class="log-item">
+                <code>${String(entry.n).padStart(2, "0")}</code>
+                <strong>${entry.event}</strong>
+                <span>${entry.detail}</span>
+              </li>`,
+          )
+          .join("");
+      }
+
+      function renderFacts(topology) {
+        elements.topologyName.textContent = topology.name;
+        const facts = [
+          ["Orders commands with", topology.coordination],
+          ["Owns the timer", topology.timer],
+          ["Recovers by", topology.recovery],
+          ["Replacement path", topology.exit],
+        ];
+        elements.topologyFacts.innerHTML = facts
+          .map(([term, detail]) => `<div class="fact"><dt>${term}</dt><dd>${detail}</dd></div>`)
+          .join("");
+
+        const verdictClass = topology.verdict === "preferred" ? "" : topology.verdict === "fallback" ? "warn" : "bad";
+        const verdictName =
+          topology.verdict === "preferred" ? "Working recommendation" : topology.verdict === "fallback" ? "Fallback" : "No proven need";
+        elements.verdict.innerHTML = `<div class="verdict ${verdictClass}"><strong>${verdictName}</strong><p>${topology.verdictText}</p></div>`;
+      }
+
+      function renderComparison() {
+        elements.comparison.innerHTML = Object.values(JobModel.topologies)
+          .map(
+            (topology) => `
+              <tr class="${topology.id === state.topologyId ? "selected" : ""}">
+                <td><strong>${topology.shortName}</strong></td>
+                <td>${topology.records.length}</td>
+                <td>${topology.timer.split(",")[0]}</td>
+              </tr>`,
+          )
+          .join("");
+      }
+
+      elements.reset.addEventListener("click", () => {
+        scenarioStep = 0;
+        dispatch("RESET");
+      });
+
+      render();
+    </script>
+  </body>
+</html>
