@@ -11,6 +11,7 @@ The decision sought is a build-ready direction for a production-grade first slic
 - [Foundation and workflow candidates](./foundation-workflow-candidates.md)
 - [Agent engines and sandbox runners](./agent-engines-and-sandbox-runners.md)
 - [Control-plane portability and telemetry](./control-plane-portability-and-telemetry.md)
+- [TypeScript workflow orchestration options](./typescript-workflow-orchestration-options.md)
 
 ## Resolved decisions
 
