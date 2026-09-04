@@ -15,6 +15,7 @@ The decision sought is a build-ready direction for a production-grade first slic
 ## Resolved decisions
 
 - [Select Ornn Forge's assembly level](https://github.com/bjesuiter/ornn-forge/issues/5): Ornn owns the job model and composes focused components behind pinned, tested, application-owned contracts. See [ADR 0001](../adr/0001-ornn-owns-the-job-model.md).
+- [Decide whether a temporary bridge earns its removal cost](https://github.com/bjesuiter/ornn-forge/issues/10): Do not adopt a temporary full-solution bridge. Retain `gh-aw`'s separation of read-only inference from privileged publication as an Ornn-owned security boundary.
 
 ## Current synthesis
 
@@ -34,7 +35,7 @@ This is the evidence-backed starting point for the open architecture decisions. 
 | Telemetry inspection | D1 event timeline, R2 log artifacts, and Cloudflare's trace viewer first | A separate backend adds operational weight and is not needed for the authoritative audit trail |
 | Optional telemetry backend | OpenObserve when retained cross-component search becomes necessary | It is a single self-hostable OTLP backend for logs, metrics, and traces |
 | Durable workflow framework | Do not adopt Restate initially | It would own job semantics and uses a non-OSI runtime license |
-| Temporary bridge | `gh-aw` is the leading disposable option if a bridge is justified | It can produce a safe GitHub analysis flow without creating durable state to migrate |
+| Temporary bridge | Decided: none | `gh-aw` is too tightly bound to GitHub Actions and too far from Ornn's intended architecture to justify adoption and removal work |
 
 ## Current decision criteria
 
