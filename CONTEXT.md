@@ -25,9 +25,29 @@ One independently testable and observable operation that a job can compose with 
 _Avoid_: Primitive, service, workflow step
 
 **Agent engine**:
-A replaceable component that executes a work order through a coding agent. An agent engine is separate from the model provider and the sandbox runner.
-_Avoid_: Model, sandbox runner, orchestrator
+A replaceable component that executes a work order through a coding agent. An agent engine is separate from the model provider, Runner, and sandbox driver.
+_Avoid_: Model, Runner, orchestrator
 
-**Sandbox runner**:
-A replaceable source of isolated execution capacity that conforms to Ornn Forge's sandbox contract. A sandbox runner may use a third-party system such as Daytona or software installed on a user-owned machine.
-_Avoid_: Sandbox provider, worker, edge server
+**Runner**:
+A component that executes a job by combining an agent engine with a sandbox driver. A Runner may be embedded in the control plane or deployed remotely.
+_Avoid_: Sandbox runner, worker, executor
+
+**Embedded Runner**:
+A Runner that operates inside the control plane and receives assigned jobs directly.
+_Avoid_: Control-plane worker, local Runner
+
+**Remote Runner**:
+An independently deployed Runner that receives job leases from the control plane.
+_Avoid_: Runner daemon, worker, agent
+
+**Runner capacity**:
+The maximum number of jobs a Runner may execute concurrently.
+_Avoid_: Worker count, parallelism
+
+**Sandbox driver**:
+A replaceable component through which a Runner creates and controls isolated execution environments.
+_Avoid_: Sandbox provider, sandbox runner
+
+**Sandbox**:
+An isolated execution environment assigned to a job.
+_Avoid_: Runner, container
