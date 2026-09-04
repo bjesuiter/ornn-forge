@@ -12,13 +12,17 @@ The decision sought is a build-ready direction for a production-grade first slic
 - [Agent engines and sandbox runners](./agent-engines-and-sandbox-runners.md)
 - [Control-plane portability and telemetry](./control-plane-portability-and-telemetry.md)
 
+## Resolved decisions
+
+- [Select Ornn Forge's assembly level](https://github.com/bjesuiter/ornn-forge/issues/5): Ornn owns the job model and composes focused components behind pinned, tested, application-owned contracts. See [ADR 0001](../adr/0001-ornn-owns-the-job-model.md).
+
 ## Current synthesis
 
 This is the evidence-backed starting point for the open architecture decisions. It is not final until the corresponding Wayfinder tickets close.
 
 | Area | Current direction | Main reason |
 | --- | --- | --- |
-| Overall assembly | Ornn-owned Cloudflare control plane and capability contracts | Full solutions own a competing job or workflow model |
+| Overall assembly | Decided: Ornn-owned Cloudflare control plane and capability contracts | Full solutions own a competing job or workflow model |
 | Runner-side orchestration | Sandcastle is the leading bounded component | It shortens agent and sandbox integration without owning durable jobs |
 | First agent engine | Pi is the leading candidate; Codex follows as a replaceability test | Pi can keep subscription credentials in the trusted runner while routing tools into the sandbox |
 | First sandbox runner | Ornn adapter over pinned TanStack plain Docker on a dedicated Linux runner | It is self-hosted, narrow, and achievable within the first-slice time limit |
@@ -215,3 +219,4 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 - 2026-09-04: Evaluated turnkey and workflow-level candidates in [Foundation and workflow candidates](./foundation-workflow-candidates.md).
 - 2026-09-04: Evaluated agent engines, sandbox runners, and transports in [Agent engines and sandbox runners](./agent-engines-and-sandbox-runners.md).
 - 2026-09-04: Evaluated control-plane portability and telemetry exits in [Control-plane portability and telemetry](./control-plane-portability-and-telemetry.md).
+- 2026-09-04: Chose an Ornn-owned job model that composes focused components behind replaceable contracts in [Select Ornn Forge's assembly level](https://github.com/bjesuiter/ornn-forge/issues/5).
