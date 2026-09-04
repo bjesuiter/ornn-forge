@@ -66,7 +66,8 @@ Examples:
 
 ### Reliable isolated jobs
 
-- Create a fresh sandbox for each job.
+- Create a fresh agent session and sandbox for each job.
+- A shared Runner must keep each job's tools, session state, and sandbox lease scoped to that job. One job cannot enumerate or read another job's state.
 - Stream or persist progress so a run can be observed.
 - Support cancellation, timeouts, retries, and deterministic cleanup.
 - Keep durable job state outside the sandbox.
@@ -105,6 +106,12 @@ The core must not depend directly on TanStack types or one sandbox vendor's job 
 ### Premature workflow taxonomy
 
 `analyze` and `implement` are useful initial intents, not a closed universe of task types. The durable abstraction is still: execute an authorized prompt and return a verified artifact.
+
+### Multi-job collaboration
+
+Status: idea only. Do not implement in the current scope.
+
+A future Job group may let isolated jobs exchange explicit, durable messages and artifacts while working on one work order. Jobs must not gain access to each other's Pi sessions, host memory, or writable sandboxes. Runner co-location may improve efficiency but must not be required for collaboration.
 
 ### Marketplace-scale product features
 

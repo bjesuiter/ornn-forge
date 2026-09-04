@@ -8,7 +8,7 @@ Last verified: 2026-09-04
 Start Ornn Forge with three Ornn-owned seams and a deliberately asymmetric first implementation:
 
 1. **Agent engine:** implement `PiEngine` against Pi's TypeScript SDK. Run Pi in the trusted Runner process, keep the OpenAI subscription credential there, and replace Pi's built-in filesystem and shell tools with Ornn tools bound to the job's sandbox.
-2. **Runner:** put the first Remote Runner on `homeserv1`. Give each job one Pi session and one Docker sandbox, and let a Runner advertise bounded Runner capacity.
+2. **Runner:** put the first Remote Runner on `homeserv1`. Give each job one Pi session and one Docker sandbox, and let a Runner advertise bounded Runner capacity. Runners may be shared, but every Pi session receives only its job-scoped Ornn tools and cannot enumerate or read another job's session state.
 3. **Sandbox driver:** keep a small Ornn-owned `SandboxDriver` interface. Implement one pinned TanStack adapter that can consume bundled or custom `SandboxProvider` implementations. Use TanStack's Docker provider first and its Daytona provider for the next execution path. Do not expose TanStack types outside this adapter or adopt TanStack's chat, job, persistence, or durable-run model.
 4. **Runner connection:** begin with an outbound authenticated HTTPS lease loop from the Remote Runner to the Cloudflare control plane. Preserve transport as an internal Runner concern. Add Iroh when another Remote Runner needs it.
 5. **Replacement proofs:** implement `CodexEngine` next. Then validate an Embedded Runner in Cloudflare with Pi and Daytona's maintained managed service. Retain OpenShell for later stronger isolation.
@@ -218,7 +218,7 @@ The following sequence should fit in days while producing independently testable
 2. Build a trusted Remote Runner on `homeserv1`. It advertises bounded Runner capacity, requests short-lived job leases over authenticated outbound HTTPS, heartbeats them, and rejects work not signed by the Ornn control plane.
 3. Implement one internal `TanStackSandboxDriver` over an exact TanStack version and configure its Docker provider first. Create one container per attempt from a digest-pinned image, clone and verify the requested commit inside it, and implement idempotent teardown plus a reaper for expired leases.
 4. Harden and self-test the Docker boundary. No host Docker socket, auth directory, SSH agent, cloud credential, or control-plane secret may be reachable from the job container. Enforce CPU, memory, PID, wall-clock, filesystem, and egress limits.
-5. Embed Pi in the trusted runner with only Ornn-provided tools. Store Pi's ChatGPT OAuth material outside job workspaces and snapshots. Map Pi events into append-only Ornn job events and redact secrets before emission.
+5. Embed Pi in the trusted Runner with only Ornn-provided tools. Give every job a fresh in-memory Pi session, disable built-in host tools and resource discovery, and bind custom tools to that job's sandbox lease. Store Pi's ChatGPT OAuth material outside job workspaces and snapshots. Map Pi events into append-only Ornn job events and redact secrets before emission.
 6. Execute one read-only analysis against a pinned GitHub commit. Persist the report and provenance as Ornn artifacts, publish the GitHub comment only from the control plane, then confirm sandbox destruction.
 7. Add failure tests: duplicate delivery, runner loss, engine abort, tool timeout, output overflow, failed artifact upload, failed GitHub publication, and failed deletion. Every state must remain inspectable and retry-safe.
 8. Add `CodexEngine` as the first replaceability test. Initially permit it only on a trusted development runner or with an explicitly approved credential strategy.
@@ -232,6 +232,7 @@ The first real repository flow is not production-ready until all of these are de
 - A job is tied to a GitHub App installation and immutable repository commit.
 - The engine never receives GitHub App credentials, control-plane credentials, or a direct publishing tool.
 - The sandbox cannot read the Pi/OpenAI auth store or runner/control-plane secrets.
+- A job cannot enumerate or read another job's Pi session, tools, sandbox lease, or artifacts.
 - Egress is denied except for the minimum allowlist, and denials are observable.
 - Cancellation and timeout terminate the process tree and the sandbox; a reaper handles an unreachable control plane.
 - Cleanup is verified, not merely requested.

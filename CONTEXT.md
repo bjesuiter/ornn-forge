@@ -16,6 +16,10 @@ _Avoid_: Task, request, prompt
 One durable attempt to execute a work order by composing capabilities and reporting their outcome.
 _Avoid_: Run, workflow
 
+**Job group (idea)**:
+A proposed set of jobs allowed to exchange explicit messages and artifacts while working on one work order. This term is reserved for possible future use and does not describe current behavior.
+_Avoid_: Shared session, shared Runner
+
 **Artifact**:
 An inspectable result returned by a job, such as an analysis comment, patch, log bundle, branch, or draft pull request.
 _Avoid_: Output, response
