@@ -6,6 +6,32 @@ This document records the options considered for assembling Ornn Forge and the e
 
 The decision sought is a build-ready direction for a production-grade first slice that handles one real GitHub repository from invocation through an analysis artifact.
 
+## Research reports
+
+- [Foundation and workflow candidates](./foundation-workflow-candidates.md)
+- [Agent engines and sandbox runners](./agent-engines-and-sandbox-runners.md)
+- [Control-plane portability and telemetry](./control-plane-portability-and-telemetry.md)
+
+## Current synthesis
+
+This is the evidence-backed starting point for the open architecture decisions. It is not final until the corresponding Wayfinder tickets close.
+
+| Area | Current direction | Main reason |
+| --- | --- | --- |
+| Overall assembly | Ornn-owned Cloudflare control plane and capability contracts | Full solutions own a competing job or workflow model |
+| Runner-side orchestration | Sandcastle is the leading bounded component | It shortens agent and sandbox integration without owning durable jobs |
+| First agent engine | Pi is the leading candidate; Codex follows as a replaceability test | Pi can keep subscription credentials in the trusted runner while routing tools into the sandbox |
+| First sandbox runner | Ornn adapter over pinned TanStack plain Docker on a dedicated Linux runner | It is self-hosted, narrow, and achievable within the first-slice time limit |
+| Runner transport | Authenticated outbound HTTPS first; Iroh later for NATed personal machines | Iroh does not run directly in the Cloudflare Workers runtime and solves connectivity rather than job ownership |
+| Durable coordination | One recoverable Durable Object per active job | Durable Objects serialize active work, while D1 retains the portable authoritative history |
+| Durable records | D1 with Drizzle and an append-only job event timeline | The SQL schema and data have a practical exit to another SQLite implementation |
+| Artifacts | R2 behind a small Ornn-owned S3-shaped contract | Artifact data and operations can move to a tested self-hosted S3 implementation |
+| Instrumentation | OpenTelemetry, with stable Ornn correlation attributes | It keeps instrumentation independent from storage and inspection tools |
+| Telemetry inspection | D1 event timeline, R2 log artifacts, and Cloudflare's trace viewer first | A separate backend adds operational weight and is not needed for the authoritative audit trail |
+| Optional telemetry backend | OpenObserve when retained cross-component search becomes necessary | It is a single self-hostable OTLP backend for logs, metrics, and traces |
+| Durable workflow framework | Do not adopt Restate initially | It would own job semantics and uses a non-OSI runtime license |
+| Temporary bridge | `gh-aw` is the leading disposable option if a bridge is justified | It can produce a safe GitHub analysis flow without creating durable state to migrate |
+
 ## Current decision criteria
 
 ### Hard requirements
@@ -64,14 +90,14 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 
 #### OpenClaw
 
-- Evaluation status: not started.
+- Evaluation status: complete; retain as an operational and security design reference, not a dependency.
 - User context: OpenClaw currently uses itself in its development workflow.
 - User context: it is opinionated, changing quickly, and does not currently appear adjustable enough for Ornn's needs.
 - Question: could it provide a disposable route to the first slice without owning Ornn's durable concepts?
 
 #### GitHub Agentic Workflows, `gh-aw`
 
-- Evaluation status: not started.
+- Evaluation status: complete; leading disposable bridge, not a permanent foundation.
 - User context: capabilities and fit are not yet known.
 - Question: can it provide useful GitHub-native workflow pieces while preserving self-hosting and control?
 
@@ -80,19 +106,19 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 #### Sandcastle
 
 - Source: https://github.com/mattpocock/sandcastle
-- Evaluation status: not started.
+- Evaluation status: complete; leading focused runner-side component behind Ornn-owned contracts.
 - Question: which orchestration, sandbox, and agent-execution responsibilities does it own, and can those parts be adopted independently?
 
 #### TanStack AI sandbox approach
 
 - Source: https://tanstack.com/blog/run-coding-agents-in-a-sandbox
-- Evaluation status: not started.
+- Evaluation status: complete; pinned plain Docker is the leading first sandbox implementation behind Ornn's runner contract.
 - Question: what abstraction does it provide over coding-agent sandboxes, and where would Ornn need its own lifecycle boundary?
 
 #### Flue 2
 
 - Source: https://flueframework.com/blog/flue-2/
-- Evaluation status: not started.
+- Evaluation status: complete; conditional disposable bridge, not a permanent dependency.
 - Question: can its workflow model support durable, inspectable jobs without taking control of Ornn's domain model?
 
 ### Lower-level implementation options
@@ -100,13 +126,13 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 #### pi coding agent SDK
 
 - Source: https://pi.dev/
-- Evaluation status: not started.
+- Evaluation status: complete; leading first agent engine because its tools can be routed into a separate sandbox while credentials remain in the trusted runner.
 - Question: how much agent execution behavior does it supply, and what orchestration would Ornn still need to own?
 
 #### Tardigrade
 
 - Source: https://github.com/clavia-labs/tardigrade
-- Evaluation status: not started.
+- Evaluation status: complete; retain its immutable-event and composable-component model as a design reference.
 - Question: which durable execution or agent-runtime responsibilities can it supply as a self-hosted component?
 
 ### Level still to classify
@@ -114,18 +140,18 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 #### Restate
 
 - Source: https://docs.restate.dev/
-- Evaluation status: not started.
+- Evaluation status: complete; reject for the first build because it would own Ornn's job semantics and its runtime license is not OSI-approved.
 - Question: is Restate best treated as the durable control plane, one building block inside it, or unnecessary machinery for Ornn's scale?
 
 #### Celld
 
-- Evaluation status: not started.
+- Evaluation status: complete; use as a pinned source-compatibility target, not as a production failover or Durable Object data-migration path.
 - User context: Celld, by Ryan, is believed to provide a self-hostable implementation compatible with Cloudflare Durable Objects.
 - Question: how complete is that compatibility, what migration path does it support, and is it credible enough to make Durable Objects reversible?
 
 #### Iroh
 
-- Evaluation status: not started.
+- Evaluation status: complete; retain for a later Ornn-built runner transport, after the HTTPS-connected first runner.
 - User context: Iroh is the preferred connection layer for an Ornn-built sandbox runner.
 - User context: the Cloudflare control plane may connect to a runner through public Iroh relays, with the option to replace those relays later.
 - Question: can Iroh provide the authenticated, replaceable connection layer while Ornn retains ownership of runner enrollment, authorization, leasing, and job state?
@@ -139,10 +165,36 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 #### OpenTelemetry
 
 - Source: https://opentelemetry.io/docs/what-is-opentelemetry/
-- Evaluation status: preliminary choice; Cloudflare runtime fit and backend remain to be researched.
+- Evaluation status: complete; select as the instrumentation standard, while keeping the authoritative job timeline in D1.
 - Finding: OpenTelemetry is an open-source, vendor-agnostic framework for generating, collecting, and exporting traces, metrics, and logs. It defines APIs, SDKs, conventions, and the OTLP protocol.
 - Finding: OpenTelemetry explicitly does not provide the storage backend or visualization frontend. Ornn must still select where telemetry is retained and how the operator inspects it.
 - Question: which OpenTelemetry SDK and export path work reliably in the Cloudflare control plane and sandbox runners, and what self-hostable backend should store the first slice's telemetry?
+
+### Additional alternatives surfaced by research
+
+#### Codex
+
+- Evaluation status: complete; strong second agent engine and fast spike option, but subscription credential placement makes Pi the cleaner first engine.
+
+#### Daytona
+
+- Evaluation status: complete; do not use as a foundation because its maintained implementation is private and the last public self-hosted release is frozen.
+
+#### NVIDIA OpenShell
+
+- Evaluation status: complete; keep as the sandbox security benchmark and possible later runner adapter.
+
+#### OpenObserve
+
+- Evaluation status: complete; preferred unified self-hosted OTLP backend when Ornn needs retained telemetry search beyond its D1 and R2 audit records.
+
+#### Jaeger
+
+- Evaluation status: complete; smaller permissively licensed alternative when trace search alone is sufficient.
+
+#### Uptrace
+
+- Evaluation status: complete; reject for the first slice because its ClickHouse and PostgreSQL stack is too heavy for one operator.
 
 ## Open comparison questions
 
@@ -160,4 +212,6 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 
 ## Evaluation log
 
-No evaluations completed yet.
+- 2026-09-04: Evaluated turnkey and workflow-level candidates in [Foundation and workflow candidates](./foundation-workflow-candidates.md).
+- 2026-09-04: Evaluated agent engines, sandbox runners, and transports in [Agent engines and sandbox runners](./agent-engines-and-sandbox-runners.md).
+- 2026-09-04: Evaluated control-plane portability and telemetry exits in [Control-plane portability and telemetry](./control-plane-portability-and-telemetry.md).
