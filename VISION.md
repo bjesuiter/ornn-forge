@@ -29,12 +29,14 @@ GitHub is the initial user interface, authorization surface, audit trail, and re
 
 - **GitHub App:** receives signed webhook events and acts with narrowly scoped installation permissions.
 - **Cloudflare control plane:** authenticates requests, manages durable job state, retries, cancellation, and result delivery.
-- **TanStack AI orchestration:** provides the portable abstraction used to work with multiple sandbox providers.
-- **Replaceable sandbox providers:** execute untrusted work in isolated environments without leaking provider-specific behavior into GitHub or job logic.
+- **Runners:** execute jobs by combining a selected agent engine with a sandbox driver. The control plane may contain an Embedded Runner, while independently deployed Remote Runners receive job leases.
+- **Agent engines:** execute work orders without owning repository access, job state, or artifact publication. Pi is first and Codex is the first replacement proof.
+- **Sandbox drivers:** create and control isolated environments behind an Ornn-owned interface. Docker is first and Daytona's managed service is the first remote replacement proof.
+- **TanStack AI sandbox providers:** supply internal sandbox implementations through one pinned adapter. TanStack types remain inside that adapter.
 
-Cloudflare is the control plane, not necessarily the sandbox plane. Sandbox platforms must remain replaceable.
+Cloudflare is the control plane and may host an Embedded Runner, but it is not necessarily the sandbox plane. The first flow uses a Remote Runner on `homeserv1`; a later Embedded Runner may operate Daytona sandboxes without depending on that machine.
 
-Orchestrator-owned concepts such as jobs, work orders, permissions, progress, and artifacts must remain independent from any concrete sandbox provider. If the TanStack AI abstraction proves too narrow for lifecycle concerns, Ornn may place a thin internal driver interface above it.
+Ornn-owned concepts such as jobs, work orders, permissions, progress, artifacts, Runners, and sandboxes remain independent from TanStack and concrete sandbox platforms. Ornn owns a small `SandboxDriver` interface that adds its security, cancellation, error, provenance, and verified-cleanup guarantees. One internal TanStack adapter reuses bundled or custom `SandboxProvider` implementations behind that interface.
 
 ## What Belongs in the Vision
 
@@ -71,11 +73,12 @@ Examples:
 - Handle duplicate webhook delivery without creating duplicate work.
 - Preserve useful results even when execution fails.
 
-### Provider portability
+### Sandbox-driver portability
 
-- Select a sandbox provider without changing GitHub-facing behavior.
-- Keep provider-specific setup, networking, secret injection, snapshots, and cleanup behind an adapter boundary.
-- Make it possible to compare or migrate between providers such as Cloudflare sandboxes, Daytona, E2B, or future alternatives.
+- Select a sandbox driver without changing GitHub-facing behavior or the agent engine.
+- Keep provider-specific setup, networking, secret injection, snapshots, identifiers, and cleanup inside the sandbox-driver module.
+- Reuse TanStack providers only after they pass Ornn's sandbox-driver contract tests.
+- Permit additional TanStack-compatible providers and direct Ornn adapters without changing callers.
 
 ## What Explicitly Does Not Belong Yet
 
@@ -95,9 +98,9 @@ Ornn must not continuously watch repositories and decide by itself what to chang
 
 Ornn must not merge pull requests, push to protected branches, deploy to production, rotate secrets, modify billing, or perform other high-impact external actions merely because repository text asks it to.
 
-### Provider lock-in
+### Sandbox-platform lock-in
 
-The core must not depend directly on one sandbox vendor's job model, filesystem API, lifecycle, or persistence semantics.
+The core must not depend directly on TanStack types or one sandbox vendor's job model, filesystem interface, lifecycle, or persistence semantics.
 
 ### Premature workflow taxonomy
 

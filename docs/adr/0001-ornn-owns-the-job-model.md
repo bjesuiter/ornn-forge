@@ -1,6 +1,6 @@
 # Ornn owns the job model
 
-Ornn Forge will own the invocation, work order, job state, capability composition, durable events, sandbox-runner protocol, artifact publication, authorization, and policy. Focused third-party components may implement mechanics behind Ornn-owned contracts, but their types, identifiers, state models, and workflow rules must not enter the domain model. This preserves control and replaceability without rebuilding generic infrastructure.
+Ornn Forge will own the invocation, work order, job state, capability composition, durable events, Runner protocol, sandbox-driver interface, artifact publication, authorization, and policy. Focused third-party modules may implement mechanics behind Ornn-owned interfaces, but their types, identifiers, state models, and workflow rules must not enter the domain model. This preserves control and replaceability without rebuilding generic infrastructure.
 
 ## Considered options
 
@@ -10,4 +10,4 @@ Ornn Forge will own the invocation, work order, job state, capability compositio
 
 ## Consequences
 
-Permanent dependencies must fit behind one adapter module, be pinned to exact versions, and pass Ornn-owned contract tests. Provider-native identifiers remain diagnostic metadata. A fake or second adapter must be able to pass the same contract before a boundary is considered proven replaceable.
+Permanent dependencies must fit behind one adapter module, be pinned to exact versions, and pass Ornn-owned contract tests. Provider-native identifiers remain diagnostic metadata. A fake or second adapter must be able to pass the same contract before a seam is considered proven replaceable.

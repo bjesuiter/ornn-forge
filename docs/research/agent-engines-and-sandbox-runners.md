@@ -1,31 +1,32 @@
-# Agent engines and sandbox runners
+# Agent engines, Runners, and sandbox drivers
 
 Status: research complete
 Last verified: 2026-09-04
 
 ## Decision
 
-Start Ornn Forge with two Ornn-owned seams and a deliberately asymmetric first implementation:
+Start Ornn Forge with three Ornn-owned seams and a deliberately asymmetric first implementation:
 
-1. **Agent engine:** implement `PiEngine` against Pi's TypeScript SDK. Run Pi in the trusted runner process, keep the OpenAI subscription credential there, and replace Pi's built-in filesystem and shell tools with Ornn tools that execute through a `SandboxRunner` handle.
-2. **Sandbox runner:** implement the first `SandboxRunner` as a thin adapter over TanStack AI's plain-Docker provider on a dedicated, user-owned Linux runner. Pin the TanStack packages. Do not adopt TanStack's chat, job, persistence, or durable-run model.
-3. **Runner connection:** begin with an outbound authenticated HTTPS lease loop from the runner to the Cloudflare control plane. Preserve transport as an internal runner concern. Add Iroh when attaching NATed personal machines is the next concrete goal.
-4. **Second adapters:** implement `CodexEngine` next. Use an OpenShell adapter or a small fake remote runner to prove runner replaceability. Do not make Daytona foundational while its maintained implementation is private.
+1. **Agent engine:** implement `PiEngine` against Pi's TypeScript SDK. Run Pi in the trusted Runner process, keep the OpenAI subscription credential there, and replace Pi's built-in filesystem and shell tools with Ornn tools bound to the job's sandbox.
+2. **Runner:** put the first Remote Runner on `homeserv1`. Give each job one Pi session and one Docker sandbox, and let a Runner advertise bounded Runner capacity.
+3. **Sandbox driver:** keep a small Ornn-owned `SandboxDriver` interface. Implement one pinned TanStack adapter that can consume bundled or custom `SandboxProvider` implementations. Use TanStack's Docker provider first and its Daytona provider for the next execution path. Do not expose TanStack types outside this adapter or adopt TanStack's chat, job, persistence, or durable-run model.
+4. **Runner connection:** begin with an outbound authenticated HTTPS lease loop from the Remote Runner to the Cloudflare control plane. Preserve transport as an internal Runner concern. Add Iroh when another Remote Runner needs it.
+5. **Replacement proofs:** implement `CodexEngine` next. Then validate an Embedded Runner in Cloudflare with Pi and Daytona's maintained managed service. Retain OpenShell for later stronger isolation.
 
 This is the best match for the stated constraints, not the shortest demo. Pi is the only evaluated engine that cleanly permits the long-lived OpenAI subscription credential to stay outside the untrusted workspace while Ornn redirects each tool operation into an independently managed sandbox. Codex is the faster all-in-one agent runtime, but its official SDK spawns Codex where the work runs. Isolated providers therefore need credentials inside the sandbox, while OpenAI recommends API-key authentication for programmatic automation. That conflicts with the subscription-only starting constraint and increases credential exposure.
 
-The first runner should be treated as production-shaped only after its hardening checks pass: dedicated host, unprivileged job user, no Docker socket or host secrets mounted into jobs, resource limits, read-only base filesystem, dropped Linux capabilities, restrictive seccomp/AppArmor, allowlisted egress, deterministic cleanup, and a startup self-test that fails closed when those controls are absent. TanStack supplies a useful provider API and lifecycle mechanics; it does not establish these host-level guarantees for Ornn.
+The first Remote Runner should be treated as production-shaped only after its hardening checks pass: dedicated host, unprivileged job user, no Docker socket or host secrets mounted into jobs, resource limits, read-only base filesystem, dropped Linux capabilities, restrictive seccomp/AppArmor, allowlisted egress, deterministic cleanup, and a startup self-test that fails closed when those controls are absent. TanStack supplies useful provider and handle interfaces; it does not establish these host-level guarantees for Ornn.
 
 The recommendation remains reversible:
 
-- Ornn owns the work order, job, artifact, event, engine, runner, and transport contracts.
+- Ornn owns the work order, job, artifact, event, agent-engine, Runner, sandbox-driver, and transport interfaces.
 - Pi, TanStack AI, Docker, Daytona, and Iroh remain adapters or implementation details.
 - No provider-native session, snapshot, or run identifier becomes an Ornn identifier.
 - A job records the resolved engine, model, context, runner, image digest, and adapter versions.
 
-## The two contracts Ornn should own
+## The execution interfaces Ornn should own
 
-The important design move is to keep **reasoning** separate from **capacity**. An agent engine decides which tool to call and emits semantic progress. A sandbox runner supplies an isolated workspace and performs concrete operations. Neither owns Ornn's durable job state.
+The important design move is to keep **reasoning** separate from **isolated execution**. An agent engine decides which tool to call and emits semantic progress. A sandbox driver creates and controls a sandbox. A Runner combines them for one or more jobs without owning Ornn's durable job state.
 
 ### `AgentEngine`
 
@@ -47,12 +48,12 @@ interface AgentEngine {
 
 The engine does **not** clone repositories, allocate capacity, publish GitHub comments, persist the canonical job, or decide whether a tool call is authorized.
 
-### `SandboxRunner`
+### `SandboxDriver`
 
-The minimum useful contract is:
+The capability decision must finalize this interface. The research sketch is:
 
 ```ts
-interface SandboxRunner {
+interface SandboxDriver {
   create(spec: SandboxSpec): Promise<SandboxLease>
   inspect(lease: SandboxLease): Promise<SandboxState>
   exec(lease: SandboxLease, request: ExecRequest): Promise<ExecResult>
@@ -65,7 +66,7 @@ interface SandboxRunner {
 
 `SandboxSpec` includes a pinned image digest, CPU/memory/process/time quotas, workspace source at an immutable commit, network policy, permitted tools, and expiry. `create` returns an Ornn lease plus an opaque provider reference. `terminate` is idempotent, and completion is not accepted until `inspect` confirms the workload is gone. Snapshot/fork/resume are optional advertised capabilities, not required methods.
 
-The runner does **not** choose a model, interpret a work order, own job retries, or publish artifacts. This lets a Pi engine use Docker today and Daytona later, and lets a future Codex engine use either runner without changing the GitHub-facing contract.
+The sandbox driver does **not** choose a model, interpret a work order, own job retries, or publish artifacts. This lets a Pi engine use Docker today and Daytona later, and lets a future Codex engine use either driver without changing the GitHub-facing contract.
 
 ## Agent-engine comparison
 
@@ -106,7 +107,7 @@ trusted runner process
        |
        | Ornn EngineTools
        v
-  SandboxRunner handle
+  SandboxDriver handle
        |
        v
 untrusted checkout + command processes
@@ -127,7 +128,7 @@ Model names and availability should be discovered from the engine/provider at ru
 
 ## Sandbox and transport comparison
 
-| Candidate | What it is | Isolation and lifecycle | Self-hosting/license | Cloudflare-control-plane fit | Fit behind `SandboxRunner` |
+| Candidate | What it is | Isolation and lifecycle | Self-hosting/license | Cloudflare-control-plane fit | Fit behind `SandboxDriver` |
 | --- | --- | --- | --- | --- | --- |
 | TanStack AI sandbox | TypeScript provider/workspace/agent abstraction | Local process, Docker container, Docker Sandbox microVM, and managed providers; lifecycle/snapshot helpers | Library is MIT; plain Docker provider is self-hostable | Runs on a Node-capable runner; Cloudflare-native path requires Containers and Durable Objects | Very clean provider API, but young and broader than Ornn needs |
 | Daytona | Sandbox control/compute platform | Container or VM classes; start/stop/pause/archive/delete, TTL, snapshots/forks depending on class | Last public self-hostable release is frozen under AGPL-3.0; current implementation is private | Remote REST API fits; maintained service is vendor-controlled | Useful comparison, but no longer an acceptable foundation |
@@ -138,14 +139,20 @@ Model names and availability should be discovered from the engine/provider at ru
 
 TanStack separates a sandbox into provider, workspace, policy, and agent runtime. Every provider implements a common `SandboxProvider`/`SandboxHandle` interface. The official provider matrix includes an unsafe local process, plain Docker containers, Docker Sandbox microVMs, Daytona, and several hosted providers ([provider documentation](https://tanstack.com/ai/latest/docs/sandbox/providers)). The core lifecycle can resume or create a sandbox, bootstrap a workspace, take a snapshot, run the agent, then snapshot or destroy it ([lifecycle documentation](https://tanstack.com/ai/latest/docs/sandbox/lifecycle)). The project is [MIT licensed](https://github.com/TanStack/ai/blob/main/LICENSE).
 
-This is close to the runner interface Ornn needs. Use that overlap to save code, but keep ownership in Ornn:
+These low-level contracts are close to the sandbox-driver interface Ornn needs. Reuse them through one internal adapter instead of writing an Ornn integration for every provider, but keep the stable interface and policy in Ornn:
 
-- Wrap only the selected provider package behind Ornn's `SandboxRunner`.
+- Implement one `TanStackSandboxDriver` that accepts any compatible `SandboxProvider`; do not expose `SandboxProvider`, `SandboxHandle`, or provider-native errors outside that module.
+- Keep per-job security and resource validation, stable error distinctions, cancellation semantics, Ornn lease identity, provenance, and verified cleanup in Ornn.
 - Keep Git checkout verification, job retries, canonical events, artifact persistence, and cleanup evidence in Ornn.
 - Feature-detect snapshot, fork, background-process, writable-stdin, port, and network-policy capabilities rather than assuming parity.
+- Require bundled and custom providers to pass the same Ornn sandbox-driver contract tests before they become schedulable targets.
 - Pin exact package versions. TanStack AI remains on a `v0` documentation track and the sandbox APIs are changing; the repository changelog is the evidence to review at each upgrade ([sandbox package changelog](https://github.com/TanStack/ai/blob/main/packages/ai-sandbox/CHANGELOG.md)).
 
-For the first self-hosted provider, plain Docker has the fewest dependencies. The TanStack provider supplies create, exec, filesystem access, commit-based snapshots, fork, resume, and destroy. Its claim of a "real container boundary" is useful but not a complete Ornn threat model ([Docker provider details](https://tanstack.com/ai/latest/docs/sandbox/providers#docker)). Ornn must configure and verify host-level limits itself. The local-process provider is explicitly unisolated and is suitable only for tests.
+For the first self-hosted provider, plain Docker has the fewest dependencies. The TanStack provider supplies create, exec, filesystem access, commit-based snapshots, fork, resume, and destroy. Its claim of a "real container boundary" is useful but not a complete Ornn threat model ([Docker provider details](https://tanstack.com/ai/latest/docs/sandbox/providers#docker)). The current provider configuration does not expose generic CPU, memory, or PID limits and enables the `host.docker.internal` host-gateway mapping by default. Ornn must disable that mapping and configure and verify host-level limits itself. The local-process provider is explicitly unisolated and is suitable only for tests.
+
+Provider lifecycle semantics also need normalization. The current Docker and Daytona implementations swallow deletion errors, Daytona does not wait for confirmed deletion, and some providers report that individual processes cannot be killed. Ornn must retain cancellation state, distinguish "not found" from provider failure, and inspect until deletion is confirmed or surface cleanup failure for the reaper.
+
+Use only TanStack's low-level provider and handle contracts. Its higher-level sandbox middleware normally launches the agent runtime inside the sandbox, while Ornn deliberately keeps Pi and its subscription credential in the trusted Runner and routes only Ornn tools into the sandbox.
 
 Docker Sandboxes offers a hypervisor microVM through the same package, but requires the `sbx` CLI, a Docker login, and a supported hypervisor. It is therefore not the default self-hostable baseline. It is a later hardening experiment if its licensing, offline behavior, and automation terms satisfy the no-vendor-dependency requirement ([Docker Sandboxes provider details](https://tanstack.com/ai/latest/docs/sandbox/providers#docker-sandboxes-sbx)).
 
@@ -161,7 +168,7 @@ The self-hosting story changed after the original candidate list was written. Da
 
 Daytona is therefore self-hostable only in the narrow sense that Ornn can operate or fork the frozen `v0.190.0` code. Today's maintained product is not independently operable from public source. The official current documentation and SDK describe the managed service, and TanStack's Daytona provider explicitly requires a Daytona API key for that service ([TanStack provider matrix](https://tanstack.com/ai/latest/docs/sandbox/providers#choosing-a-provider)). This fails the project's maintained self-hosting and low-lock-in tests.
 
-Do not start with Daytona under the current constraints. The managed service violates the no-paid-vendor preference, while the public self-host stack is frozen, operationally large, privileged by default, and disables resource limits in its sample configuration. A Daytona adapter may still be useful as a disposable compatibility test, but it should not be the proof that Ornn has a durable self-hosting exit. If used, pin the public version or API contract and require `terminate` to wait for and verify deletion rather than trusting a fire-and-forget API response.
+Do not start with Daytona. Use its maintained managed API as the next sandbox-driver proof after the independently operable Docker path works. This tests the Embedded Runner and managed remote capacity without making Daytona authoritative or leaving Ornn stuck paying for the only working path. Pin the TanStack provider and Daytona API expectations, and require `terminate` to wait for and verify deletion rather than trusting a fire-and-forget API response.
 
 ### Iroh
 
@@ -191,9 +198,9 @@ This is the fastest demo and the weakest match for the initial authentication co
 
 This preserves the key boundaries with the least machinery. The subscription credential stays with the Pi process, the untrusted checkout receives only bounded tool operations, and TanStack shortens the Docker lifecycle and filesystem/process work. The first read-only analysis needs only a small tool set. The main risks are custom glue and Docker hardening. Both are visible and independently testable.
 
-### C. Pi or Codex inside self-hosted Daytona
+### C. Pi in an Embedded Runner with managed Daytona (selected as the next proof)
 
-This has a clean remote runner API, but no longer has a maintained public-source exit from the managed service. Codex retains the credential-placement problem; Pi inside the sandbox does too. Pi outside Daytona with tool routing is sound but adds two abstraction layers before the first slice. Keep it as an optional compatibility adapter, not the second runner proof.
+After the local Docker path works, run Pi in an Embedded Runner near the Cloudflare control plane and route its Ornn tools into Daytona through `TanStackSandboxDriver`. The Pi credential remains outside the Daytona sandbox. This proves that the control plane can schedule cloud capacity without a separately deployed Remote Runner and that the sandbox-driver interface spans self-hosted and managed providers. It is not the self-hosting exit; the Docker path provides that.
 
 ### D. Engine inside OpenShell
 
@@ -207,15 +214,15 @@ This proves the desired long-term machine attachment too early. Iroh solves reac
 
 The following sequence should fit in days while producing independently testable capabilities:
 
-1. Define normalized `AgentEvent`, `ResolvedAgentProfile`, `EngineTools`, `SandboxSpec`, `SandboxLease`, and `SandboxRunner` types. Add contract tests with fake engines and runners.
-2. Build a trusted runner daemon on a dedicated Linux host. It requests short-lived job leases over authenticated outbound HTTPS, heartbeats them, and rejects work not signed by the Ornn control plane.
-3. Wrap TanStack's pinned plain-Docker provider. Create one container per attempt from a digest-pinned image, clone and verify the requested commit inside it, and implement idempotent teardown plus a reaper for expired leases.
+1. Define normalized `AgentEvent`, `ResolvedAgentProfile`, `EngineTools`, `SandboxSpec`, `SandboxLease`, and `SandboxDriver` types. Add contract tests with fake engines and sandbox drivers.
+2. Build a trusted Remote Runner on `homeserv1`. It advertises bounded Runner capacity, requests short-lived job leases over authenticated outbound HTTPS, heartbeats them, and rejects work not signed by the Ornn control plane.
+3. Implement one internal `TanStackSandboxDriver` over an exact TanStack version and configure its Docker provider first. Create one container per attempt from a digest-pinned image, clone and verify the requested commit inside it, and implement idempotent teardown plus a reaper for expired leases.
 4. Harden and self-test the Docker boundary. No host Docker socket, auth directory, SSH agent, cloud credential, or control-plane secret may be reachable from the job container. Enforce CPU, memory, PID, wall-clock, filesystem, and egress limits.
 5. Embed Pi in the trusted runner with only Ornn-provided tools. Store Pi's ChatGPT OAuth material outside job workspaces and snapshots. Map Pi events into append-only Ornn job events and redact secrets before emission.
 6. Execute one read-only analysis against a pinned GitHub commit. Persist the report and provenance as Ornn artifacts, publish the GitHub comment only from the control plane, then confirm sandbox destruction.
 7. Add failure tests: duplicate delivery, runner loss, engine abort, tool timeout, output overflow, failed artifact upload, failed GitHub publication, and failed deletion. Every state must remain inspectable and retry-safe.
 8. Add `CodexEngine` as the first replaceability test. Initially permit it only on a trusted development runner or with an explicitly approved credential strategy.
-9. Prove capacity replaceability with an OpenShell adapter or a minimal fake remote runner. A Daytona adapter is optional because the maintained implementation no longer has public source. Add Iroh when general user-owned runner enrollment becomes the next goal.
+9. Prove the next execution path with an Embedded Runner and TanStack's Daytona provider against Daytona's managed API. Keep OpenShell as a later stronger-isolation option and add Iroh when general Remote Runner enrollment becomes the next goal.
 
 ## Acceptance gates
 
@@ -230,8 +237,8 @@ The first real repository flow is not production-ready until all of these are de
 - Cleanup is verified, not merely requested.
 - Provider-native IDs remain opaque metadata and can be replaced without changing job or artifact records.
 - Logs, spans, and persisted events identify job, attempt, runner, engine, model, image digest, repository commit, and terminal reason without containing prompts' secret values or credentials.
-- The same agent-engine contract passes against a fake runner, and the same runner contract passes without Pi.
+- The same agent-engine contract passes against a fake sandbox driver, and the same sandbox-driver contract passes without Pi.
 
 ## Bottom line
 
-Ornn should begin as a small composition kernel, not as a wrapper around a complete agent platform. **Pi supplies the replaceable reasoning loop. An Ornn adapter over TanStack's Docker provider supplies initial isolated capacity. HTTPS supplies the initial runner link.** Codex should be the next engine adapter. OpenShell is the security benchmark and possible second runner. Iroh follows when NATed personal-machine enrollment matters. Daytona is now only an optional compatibility target because its maintained implementation is private.
+Ornn should begin as a small composition kernel, not as a wrapper around a complete agent platform. **Pi supplies the replaceable reasoning loop. A Remote Runner on `homeserv1` combines it with isolated execution. One Ornn-owned sandbox-driver interface reuses TanStack's Docker provider first and its Daytona provider next. HTTPS supplies the initial Runner link.** Codex is the next engine adapter. The Embedded Runner plus managed Daytona is the next execution-path proof. OpenShell remains the stronger-isolation option, and Iroh follows when general NATed Remote Runner enrollment matters.

@@ -15,6 +15,7 @@ The decision sought is a build-ready direction for a production-grade first slic
 ## Resolved decisions
 
 - [Select Ornn Forge's assembly level](https://github.com/bjesuiter/ornn-forge/issues/5): Ornn owns the job model and composes focused components behind pinned, tested, application-owned contracts. See [ADR 0001](../adr/0001-ornn-owns-the-job-model.md).
+- [Select the first agent engine and sandbox runner](https://github.com/bjesuiter/ornn-forge/issues/6): Start with a Pi-powered Remote Runner on `homeserv1` and local Docker; prove Codex next, then an Embedded Runner with Daytona's managed API.
 - [Decide whether a temporary bridge earns its removal cost](https://github.com/bjesuiter/ornn-forge/issues/10): Do not adopt a temporary full-solution bridge. Retain `gh-aw`'s separation of read-only inference from privileged publication as an Ornn-owned security boundary.
 
 ## Current synthesis
@@ -24,9 +25,11 @@ This is the evidence-backed starting point for the open architecture decisions. 
 | Area | Current direction | Main reason |
 | --- | --- | --- |
 | Overall assembly | Decided: Ornn-owned Cloudflare control plane and capability contracts | Full solutions own a competing job or workflow model |
-| Runner-side orchestration | Sandcastle is the leading bounded component | It shortens agent and sandbox integration without owning durable jobs |
-| First agent engine | Pi is the leading candidate; Codex follows as a replaceability test | Pi can keep subscription credentials in the trusted runner while routing tools into the sandbox |
-| First sandbox runner | Ornn adapter over pinned TanStack plain Docker on a dedicated Linux runner | It is self-hosted, narrow, and achievable within the first-slice time limit |
+| First Runner | Decided: Remote Runner on `homeserv1` with bounded Runner capacity | It provides an independently operated path and can host one Pi session and one sandbox per job |
+| First agent engine | Decided: Pi; Codex follows as the first real replacement | Pi keeps subscription credentials in the trusted Runner while routing tools into the sandbox |
+| Sandbox-driver module | Ornn owns a small interface; one pinned TanStack adapter reuses bundled or custom providers internally | TanStack saves provider integration work without defining Ornn's security, cleanup, identity, or error semantics |
+| First sandbox driver | TanStack's Docker provider behind the Ornn adapter | It is self-hosted on `homeserv1` and exposes the filesystem and process operations Pi's tools need |
+| Next execution path | Embedded Runner in Cloudflare with TanStack's Daytona provider, pending feasibility research | It proves both Embedded Runner execution and a managed remote sandbox without making Daytona authoritative |
 | Runner transport | Authenticated outbound HTTPS first; Iroh later for NATed personal machines | Iroh does not run directly in the Cloudflare Workers runtime and solves connectivity rather than job ownership |
 | Durable coordination | One recoverable Durable Object per active job | Durable Objects serialize active work, while D1 retains the portable authoritative history |
 | Durable records | D1 with Drizzle and an append-only job event timeline | The SQL schema and data have a practical exit to another SQLite implementation |
@@ -42,11 +45,11 @@ This is the evidence-backed starting point for the open architecture decisions. 
 ### Hard requirements
 
 - Ornn must not depend on an application component or managed service without a credible exit to an independently operable replacement.
-- Ornn must own the overall system shape, including its GitHub contract, job model, deployment, and sandbox boundary.
+- Ornn must own the overall system shape, including its GitHub contract, job model, deployment, Runner protocol, and sandbox-driver interface.
 - Ornn must be assembled from a small set of independently testable, observable capabilities. Higher-order workflows should compose those capabilities rather than hide them inside one framework-controlled operation.
-- The system must support replaceable sandbox runners, with one runner implementation integrated initially.
-- Daytona and user-owned machines must be able to supply sandbox capacity through the same Ornn-owned contract.
-- The agent engine must be replaceable independently from the sandbox runner and model provider.
+- The system must support Embedded and Remote Runners, with the Remote Runner integrated first.
+- Docker, Daytona, and future sandbox platforms must fit behind the same Ornn-owned sandbox-driver interface.
+- The agent engine must be replaceable independently from the Runner, sandbox driver, and model provider.
 - The first slice must be suitable for daily production use, including credible security, correctness, cleanup, and failure handling.
 - Required application components must be self-hostable. Managed infrastructure and model APIs are acceptable when Ornn owns the boundary and a credible replacement exists.
 - The initial control plane will run on Cloudflare. Cloudflare-specific services must remain behind application-owned contracts so the control-plane code can move later.
@@ -68,15 +71,16 @@ This is the evidence-backed starting point for the open architecture decisions. 
 - The control plane should run on Cloudflare initially.
 - The only initially authorized GitHub actor is `bjesuiter`.
 - The GitHub App may operate on every repository to which it is installed. Repository ownership does not grant invocation authority to other users.
-- The initial agent engine will be Codex or pi using the user's OpenAI subscription. The engine choice remains open, and the available OpenAI model variant should be selectable at runtime.
+- The initial agent engine is Pi using the user's OpenAI subscription. Codex is the first real replacement proof, and the available OpenAI model variant should be selectable at runtime.
 - Ornn will have an operator-controlled default agent profile. The authorized invoker may select another allowlisted profile per invocation. Each job records the resolved engine, model, and context configuration rather than depending only on a mutable profile name.
 - Anthropic models are expected later for adversarial code review; that review is not yet part of the first slice.
 - The control plane is one modular deployment managed by one operator. Capabilities are internal code boundaries, not microservices.
 - Research may add alternatives when they fill a missing capability or provide a clearly stronger self-hostable comparison.
 - The first implementation should arrive in days rather than weeks, but speed does not outrank control, security, or stability.
 - Production-grade means reliable operation by one operator. It requires a secure authenticated entrance, strict invocation authorization, inspectable job state, and a minimal useful telemetry set. Cloudflare supplies availability for its underlying services, so Ornn does not need its own high-availability system in the first slice.
-- Research may select the first sandbox runner. A user-owned runner follows as the next proof of the sandbox-runner contract and is not required before the first repository flow.
-- Iroh applies to an Ornn-built runner on user-owned machines. Other sandbox runners may use their native APIs behind the same Ornn-owned contract.
+- The first path uses a Remote Runner on `homeserv1`, one Pi session and one Docker sandbox per job, configurable Runner capacity, and authenticated outbound HTTPS polling.
+- The next path is an Embedded Runner in Cloudflare using Daytona's maintained managed service. Its runtime and authentication feasibility remains under research.
+- Iroh applies to a later Remote Runner transport. Sandbox platforms remain behind the sandbox-driver interface and may use their native connections inside an adapter.
 
 ## Permitted Cloudflare building blocks
 
@@ -117,8 +121,8 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 #### TanStack AI sandbox approach
 
 - Source: https://tanstack.com/blog/run-coding-agents-in-a-sandbox
-- Evaluation status: complete; pinned plain Docker is the leading first sandbox implementation behind Ornn's runner contract.
-- Question: what abstraction does it provide over coding-agent sandboxes, and where would Ornn need its own lifecycle boundary?
+- Evaluation status: complete; reuse pinned `SandboxProvider` implementations inside one Ornn adapter, with Docker first and Daytona next.
+- Decision: Ornn retains its own small `SandboxDriver` interface because TanStack does not guarantee Ornn's resource policy, error distinctions, cancellation semantics, or verified cleanup. Custom sandbox targets may implement TanStack's public provider contract and must pass Ornn's contract tests.
 
 #### Flue 2
 
@@ -156,8 +160,8 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 
 #### Iroh
 
-- Evaluation status: complete; retain for a later Ornn-built runner transport, after the HTTPS-connected first runner.
-- User context: Iroh is the preferred connection layer for an Ornn-built sandbox runner.
+- Evaluation status: complete; retain for a later Ornn-built Runner transport, after the HTTPS-connected first Remote Runner.
+- User context: Iroh is the preferred connection layer for an Ornn-built Remote Runner.
 - User context: the Cloudflare control plane may connect to a runner through public Iroh relays, with the option to replace those relays later.
 - Question: can Iroh provide the authenticated, replaceable connection layer while Ornn retains ownership of runner enrollment, authorization, leasing, and job state?
 
@@ -173,7 +177,7 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 - Evaluation status: complete; select as the instrumentation standard, while keeping the authoritative job timeline in D1.
 - Finding: OpenTelemetry is an open-source, vendor-agnostic framework for generating, collecting, and exporting traces, metrics, and logs. It defines APIs, SDKs, conventions, and the OTLP protocol.
 - Finding: OpenTelemetry explicitly does not provide the storage backend or visualization frontend. Ornn must still select where telemetry is retained and how the operator inspects it.
-- Question: which OpenTelemetry SDK and export path work reliably in the Cloudflare control plane and sandbox runners, and what self-hostable backend should store the first slice's telemetry?
+- Question: which OpenTelemetry SDK and export path work reliably in the Cloudflare control plane and Runners, and what self-hostable backend should store the first slice's telemetry?
 
 ### Additional alternatives surfaced by research
 
@@ -183,11 +187,11 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 
 #### Daytona
 
-- Evaluation status: complete; do not use as a foundation because its maintained implementation is private and the last public self-hosted release is frozen.
+- Evaluation status: complete; use the maintained managed API as the next sandbox-driver proof, but not as the self-hosting foundation because the last public self-hosted release is frozen.
 
 #### NVIDIA OpenShell
 
-- Evaluation status: complete; keep as the sandbox security benchmark and possible later runner adapter.
+- Evaluation status: complete; keep as the sandbox security benchmark and possible later sandbox-driver implementation.
 
 #### OpenObserve
 
@@ -208,7 +212,7 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 - What contract makes each capability independently testable without forcing all capabilities into one process or deployment?
 - Can a temporary full solution be isolated behind the same contracts intended for the long-term system?
 - What isolation mechanism should a user-owned machine provide for untrusted repository work?
-- What protocol should connect sandbox runners, including user-owned machines, to the control plane?
+- What protocol should connect Remote Runners, including user-owned machines, to the control plane?
 - What minimal telemetry makes every job inspectable without requiring a custom dashboard?
 - Where should OpenTelemetry data be stored and inspected in the first slice?
 - Which candidates are actually self-hostable under licenses and deployment models acceptable for this project?
@@ -218,6 +222,6 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 ## Evaluation log
 
 - 2026-09-04: Evaluated turnkey and workflow-level candidates in [Foundation and workflow candidates](./foundation-workflow-candidates.md).
-- 2026-09-04: Evaluated agent engines, sandbox runners, and transports in [Agent engines and sandbox runners](./agent-engines-and-sandbox-runners.md).
+- 2026-09-04: Evaluated agent engines, Runners, sandbox drivers, and transports in [Agent engines and sandbox runners](./agent-engines-and-sandbox-runners.md).
 - 2026-09-04: Evaluated control-plane portability and telemetry exits in [Control-plane portability and telemetry](./control-plane-portability-and-telemetry.md).
 - 2026-09-04: Chose an Ornn-owned job model that composes focused components behind replaceable contracts in [Select Ornn Forge's assembly level](https://github.com/bjesuiter/ornn-forge/issues/5).
