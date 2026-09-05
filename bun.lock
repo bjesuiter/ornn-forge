@@ -5,6 +5,8 @@
     "": {
       "name": "ornn-forge",
       "dependencies": {
+        "@ornn-forge/domain": "workspace:*",
+        "@ornn-forge/protocol": "workspace:*",
         "@tanstack/react-router": "1.170.17",
         "@tanstack/react-start": "1.168.27",
         "react": "19.2.7",
@@ -23,6 +25,18 @@
         "vite": "8.1.4",
         "wrangler": "4.110.0",
       },
+    },
+    "apps/runner": {
+      "name": "@ornn-forge/runner",
+      "dependencies": {
+        "@ornn-forge/protocol": "workspace:*",
+      },
+    },
+    "packages/domain": {
+      "name": "@ornn-forge/domain",
+    },
+    "packages/protocol": {
+      "name": "@ornn-forge/protocol",
     },
   },
   "packages": {
@@ -203,6 +217,12 @@
     "@oozcitak/url": ["@oozcitak/url@3.0.0", "", { "dependencies": { "@oozcitak/infra": "^2.0.2", "@oozcitak/util": "^10.0.0" } }, "sha512-ZKfET8Ak1wsLAiLWNfFkZc/BraDccuTJKR6svTYc7sVjbR+Iu0vtXdiDMY4o6jaFl5TW2TlS7jbLl4VovtAJWQ=="],
 
     "@oozcitak/util": ["@oozcitak/util@10.0.0", "", {}, "sha512-hAX0pT/73190NLqBPPWSdBVGtbY6VOhWYK3qqHqtXQ1gK7kS2yz4+ivsN07hpJ6I3aeMtKP6J6npsEKOAzuTLA=="],
+
+    "@ornn-forge/domain": ["@ornn-forge/domain@workspace:packages/domain"],
+
+    "@ornn-forge/protocol": ["@ornn-forge/protocol@workspace:packages/protocol"],
+
+    "@ornn-forge/runner": ["@ornn-forge/runner@workspace:apps/runner"],
 
     "@oxc-project/types": ["@oxc-project/types@0.139.0", "", {}, "sha512-r9gHphtCs+1M7J0pw6Sn/hh/Wpa/iQrOOkrNAlVLF/gHq+/CJmHIWKKUUhdWjcD6CIa8idarspCsASiXCXvFUw=="],
 

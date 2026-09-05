@@ -10,6 +10,8 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiV1RunnerOperationRouteImport } from './routes/api/v1/runner/$operation'
+import { Route as ApiV1MessagesOrnnMessageIdRouteImport } from './routes/api/v1/messages/$ornnMessageId'
 import { Route as ApiV1JobsJobIdRouteImport } from './routes/api/v1/jobs/$jobId'
 import { Route as ApiV1GithubWebhookRouteImport } from './routes/api/v1/github/webhook'
 
@@ -18,6 +20,17 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1RunnerOperationRoute = ApiV1RunnerOperationRouteImport.update({
+  id: '/api/v1/runner/$operation',
+  path: '/api/v1/runner/$operation',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1MessagesOrnnMessageIdRoute =
+  ApiV1MessagesOrnnMessageIdRouteImport.update({
+    id: '/api/v1/messages/$ornnMessageId',
+    path: '/api/v1/messages/$ornnMessageId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiV1JobsJobIdRoute = ApiV1JobsJobIdRouteImport.update({
   id: '/api/v1/jobs/$jobId',
   path: '/api/v1/jobs/$jobId',
@@ -33,30 +46,54 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
   '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
+  '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
+  '/api/v1/runner/$operation': typeof ApiV1RunnerOperationRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
   '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
+  '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
+  '/api/v1/runner/$operation': typeof ApiV1RunnerOperationRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
   '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
+  '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
+  '/api/v1/runner/$operation': typeof ApiV1RunnerOperationRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/v1/github/webhook' | '/api/v1/jobs/$jobId'
+  fullPaths:
+    | '/'
+    | '/api/v1/github/webhook'
+    | '/api/v1/jobs/$jobId'
+    | '/api/v1/messages/$ornnMessageId'
+    | '/api/v1/runner/$operation'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/v1/github/webhook' | '/api/v1/jobs/$jobId'
-  id: '__root__' | '/' | '/api/v1/github/webhook' | '/api/v1/jobs/$jobId'
+  to:
+    | '/'
+    | '/api/v1/github/webhook'
+    | '/api/v1/jobs/$jobId'
+    | '/api/v1/messages/$ornnMessageId'
+    | '/api/v1/runner/$operation'
+  id:
+    | '__root__'
+    | '/'
+    | '/api/v1/github/webhook'
+    | '/api/v1/jobs/$jobId'
+    | '/api/v1/messages/$ornnMessageId'
+    | '/api/v1/runner/$operation'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ApiV1GithubWebhookRoute: typeof ApiV1GithubWebhookRoute
   ApiV1JobsJobIdRoute: typeof ApiV1JobsJobIdRoute
+  ApiV1MessagesOrnnMessageIdRoute: typeof ApiV1MessagesOrnnMessageIdRoute
+  ApiV1RunnerOperationRoute: typeof ApiV1RunnerOperationRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -66,6 +103,20 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/runner/$operation': {
+      id: '/api/v1/runner/$operation'
+      path: '/api/v1/runner/$operation'
+      fullPath: '/api/v1/runner/$operation'
+      preLoaderRoute: typeof ApiV1RunnerOperationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/messages/$ornnMessageId': {
+      id: '/api/v1/messages/$ornnMessageId'
+      path: '/api/v1/messages/$ornnMessageId'
+      fullPath: '/api/v1/messages/$ornnMessageId'
+      preLoaderRoute: typeof ApiV1MessagesOrnnMessageIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/v1/jobs/$jobId': {
@@ -89,6 +140,8 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ApiV1GithubWebhookRoute: ApiV1GithubWebhookRoute,
   ApiV1JobsJobIdRoute: ApiV1JobsJobIdRoute,
+  ApiV1MessagesOrnnMessageIdRoute: ApiV1MessagesOrnnMessageIdRoute,
+  ApiV1RunnerOperationRoute: ApiV1RunnerOperationRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

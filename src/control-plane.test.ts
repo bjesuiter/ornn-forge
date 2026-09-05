@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { createControlPlane, createInMemoryInvocationStore } from './control-plane'
+import { envelope } from '@ornn-forge/protocol'
 
 const webhookSecret = 'webhook-secret'
 const operatorSecret = 'o'.repeat(32)
@@ -85,7 +86,7 @@ test('admits one signed delivery and lets the operator inspect its pending Analy
 
   expect(inspected.status).toBe(200)
   expect(inspected.headers.get('cache-control')).toBe('no-store')
-  const inspection = await inspected.json() as { events: Array<{ id: string; type: string; revision: string }> }
+  const inspection = await inspected.json() as { events: Array<{ id: string; type: string; revision: string }>; message: { id: string } }
   expect(inspection).toMatchObject({
     apiVersion: 'v1',
     principal: 'operator:bjesuiter',
@@ -101,6 +102,97 @@ test('admits one signed delivery and lets the operator inspect its pending Analy
     { id: expect.stringMatching(/^evt_v1_/), type: 'job.pending', revision: '2' },
   ])
   expect(inspection.events).toHaveLength(2)
+
+  const resolved = await app.fetch(new Request(`https://ornn.example/api/v1/messages/${inspection.message.id}`, {
+    headers: { authorization: `Bearer ${operatorSecret}` },
+  }))
+  expect(await resolved.json()).toMatchObject({ job: { id: accepted.jobId }, message: { id: inspection.message.id } })
+})
+
+test('leases one pending Job to its authenticated Runner and records its fixture Analysis artifact', async () => {
+  const calls: string[] = []
+  const app = createControlPlane({
+    store: createInMemoryInvocationStore(),
+    githubWebhookSecret: webhookSecret,
+    githubInstallationId: '42',
+    githubRepositoryId: '99',
+    operatorBearerSecret: operatorSecret,
+    runnerCredentialId: 'runner_homeserv1',
+    runnerCredentialSecret: 'r'.repeat(32),
+    messagePublisher: {
+      reconcile: async () => undefined,
+      create: async ({ body }) => { calls.push(`create:${body}`); return { githubCommentId: '17' } },
+      update: async ({ githubCommentId, body }) => { calls.push(`update:${githubCommentId}:${body}`) },
+    },
+  })
+  const admitted = await app.fetch(await signedWebhookRequest('delivery-runner-1', issueComment()))
+  const { jobId } = await admitted.json() as { jobId: string }
+  const runnerRequest = (type: string, payload: Record<string, unknown>) => new Request(`https://ornn.example/api/v1/runner/${type}`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${'r'.repeat(32)}`,
+      'content-type': 'application/json',
+      'x-ornn-runner-id': 'runner_homeserv1',
+    },
+    body: JSON.stringify(envelope(`runner.${type}`, payload)),
+  })
+
+  const polled = await app.fetch(runnerRequest('poll', { runnerId: 'runner_homeserv1' }))
+  expect(polled.status).toBe(200)
+  const leased = await polled.json() as { type: 'runner.lease'; payload: { jobId: string; leaseToken: string; generation: number } }
+  expect(leased).toMatchObject({ type: 'runner.lease', payload: { jobId, generation: 1 } })
+  expect(leased.payload.leaseToken).toMatch(/^lease_v1_/)
+
+  const duplicatePoll = await app.fetch(runnerRequest('poll', { runnerId: 'runner_homeserv1' }))
+  expect(await duplicatePoll.json()).toMatchObject({ type: 'runner.no_work' })
+
+  const heartbeat = await app.fetch(runnerRequest('heartbeat', {
+    runnerId: 'runner_homeserv1', jobId, leaseToken: leased.payload.leaseToken,
+  }))
+  expect(await heartbeat.json()).toMatchObject({ type: 'lease.accepted', payload: { jobId } })
+
+  const result = await app.fetch(runnerRequest('result', {
+    runnerId: 'runner_homeserv1', jobId, leaseToken: leased.payload.leaseToken,
+    artifact: { schemaVersion: 1, kind: 'plan', summary: 'Fixture analysis complete', details: 'The fixture executor completed.' },
+  }))
+  expect(await result.json()).toMatchObject({ type: 'lease.accepted', payload: { jobId } })
+
+  const inspected = await app.fetch(new Request(`https://ornn.example/api/v1/jobs/${jobId}`, {
+    headers: { authorization: `Bearer ${operatorSecret}` },
+  }))
+  expect(await inspected.json()).toMatchObject({
+    job: { id: jobId, state: 'succeeded' },
+    artifact: { kind: 'plan', summary: 'Fixture analysis complete' },
+    executionOutcome: { status: 'succeeded' },
+    cleanupStatus: { status: 'verified' },
+    message: { id: expect.stringMatching(/^om_v1_/), githubCommentId: '17', revision: 2, latestAttempt: 'succeeded' },
+  })
+  expect(calls).toHaveLength(2)
+  expect(calls[0]).toContain('create:Ornn Analyze Job accepted')
+  expect(calls[1]).toContain('update:17:Ornn Analyze Job completed: Fixture analysis complete')
+})
+
+test('rejects unsupported protocol and wrong lease tokens without changing the pending Job', async () => {
+  const app = createControlPlane({
+    store: createInMemoryInvocationStore(), githubWebhookSecret: webhookSecret, githubInstallationId: '42', githubRepositoryId: '99',
+    operatorBearerSecret: operatorSecret, runnerCredentialId: 'runner_homeserv1', runnerCredentialSecret: 'r'.repeat(32),
+  })
+  const admitted = await app.fetch(await signedWebhookRequest('delivery-rejection-1', issueComment()))
+  const { jobId } = await admitted.json() as { jobId: string }
+  const request = (operation: string, body: unknown) => app.fetch(new Request(`https://ornn.example/api/v1/runner/${operation}`, {
+    method: 'POST', headers: { authorization: `Bearer ${'r'.repeat(32)}`, 'content-type': 'application/json', 'x-ornn-runner-id': 'runner_homeserv1' }, body: JSON.stringify(body),
+  }))
+  const unsupported = await request('poll', { protocol: { major: 2 }, type: 'runner.poll', payload: { runnerId: 'runner_homeserv1' } })
+  expect(unsupported.status).toBe(426)
+  const poll = await request('poll', envelope('runner.poll', { runnerId: 'runner_homeserv1' }))
+  const lease = await poll.json() as { payload: { leaseToken: string } }
+  const wrong = await request('heartbeat', envelope('runner.heartbeat', { runnerId: 'runner_homeserv1', jobId, leaseToken: 'lease_v1_wrong' }))
+  expect(wrong.status).toBe(403)
+  const inspected = await app.fetch(new Request(`https://ornn.example/api/v1/jobs/${jobId}`, { headers: { authorization: `Bearer ${operatorSecret}` } }))
+  const inspection = await inspected.json() as { job: { state: string }; artifact?: unknown }
+  expect(inspection).toMatchObject({ job: { state: 'leased' } })
+  expect(inspection.artifact).toBeUndefined()
+  expect(lease.payload.leaseToken).toMatch(/^lease_v1_/)
 })
 
 test('admits an Issue opened with an @ornn-forge mention in its description', async () => {

@@ -12,5 +12,5 @@
     "strict": true,
     "noEmit": true
   },
-  "include": ["src", "scripts", "vite.config.ts", "wrangler.jsonc", "worker-configuration.d.ts"]
+  "include": ["src", "apps", "packages", "scripts", "vite.config.ts", "wrangler.jsonc", "worker-configuration.d.ts"]
 }

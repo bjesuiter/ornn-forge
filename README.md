@@ -17,7 +17,25 @@ account and apply the checked-in migration before deploying. The committed
 wrangler d1 migrations apply ornn-forge --remote
 wrangler secret put GITHUB_WEBHOOK_SECRET
 wrangler secret put OPERATOR_BEARER_SECRET
+wrangler secret put ORNN_RUNNER_CREDENTIAL_SECRET
+wrangler secret put GITHUB_MESSAGE_TOKEN
 ```
+
+Set `ORNN_RUNNER_CREDENTIAL_ID` as a non-secret Worker variable and provision the
+same 256-bit `ORNN_RUNNER_CREDENTIAL_SECRET` only to the `homeserv1` Runner. The
+Runner polls outward; it never needs an inbound endpoint:
+
+```sh
+ORNN_CONTROL_PLANE_URL=https://ornn-forge.example \
+ORNN_RUNNER_ID=runner_homeserv1 \
+ORNN_RUNNER_CREDENTIAL="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')" \
+bun run runner:fixture
+```
+
+`GITHUB_MESSAGE_TOKEN` is a GitHub App installation token with issue-comment
+write access. Ornn records its opaque message ID, effect key, comment identity,
+and publication attempt in D1; a retry reconciles the known comment before it
+edits and does not create another message.
 
 `OPERATOR_BEARER_SECRET` is a 256-bit secret, supplied either as 32 raw bytes or
 as a 43-character base64url value. Generate the latter with:

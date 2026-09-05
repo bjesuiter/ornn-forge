@@ -1,0 +1,9 @@
+{
+  "name": "@ornn-forge/runner",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ornn-forge/protocol": "workspace:*"
+  },
+  "scripts": { "fixture": "bun src/main.ts" }
+}

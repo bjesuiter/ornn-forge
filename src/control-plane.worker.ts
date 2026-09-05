@@ -1,4 +1,5 @@
 import { createControlPlane, createD1InvocationStore } from './control-plane'
+import { createGitHubMessagePublisher } from './github-message-publisher'
 
 export function createCloudflareControlPlane(env: Cloudflare.Env) {
   return createControlPlane({
@@ -8,5 +9,8 @@ export function createCloudflareControlPlane(env: Cloudflare.Env) {
     githubRepositoryId: env.GITHUB_REPOSITORY_ID,
     githubRepositoryFullName: env.GITHUB_REPOSITORY_FULL_NAME,
     operatorBearerSecret: env.OPERATOR_BEARER_SECRET,
+    runnerCredentialId: env.ORNN_RUNNER_CREDENTIAL_ID,
+    runnerCredentialSecret: env.ORNN_RUNNER_CREDENTIAL_SECRET,
+    messagePublisher: createGitHubMessagePublisher(env.GITHUB_MESSAGE_TOKEN),
   })
 }

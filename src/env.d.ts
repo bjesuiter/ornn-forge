@@ -6,5 +6,8 @@ declare namespace Cloudflare {
     GITHUB_REPOSITORY_ID: string
     GITHUB_REPOSITORY_FULL_NAME: string
     OPERATOR_BEARER_SECRET: string
+    ORNN_RUNNER_CREDENTIAL_ID: string
+    ORNN_RUNNER_CREDENTIAL_SECRET: string
+    GITHUB_MESSAGE_TOKEN: string
   }
 }

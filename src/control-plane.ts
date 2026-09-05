@@ -1,3 +1,12 @@
+import {
+  envelope,
+  isAnalysisArtifact,
+  parseRunnerEnvelope,
+  type AnalysisArtifact,
+  type LeaseGrant,
+} from '@ornn-forge/protocol'
+import type { CleanupStatus, ExecutionOutcome, OrnnMessageState } from '@ornn-forge/domain'
+
 const API_VERSION = 'v1'
 const EVENT_SCHEMA_VERSION = 1
 const INVOCATION_SCHEMA_VERSION = 1
@@ -14,6 +23,15 @@ export type ControlPlaneOptions = {
   githubRepositoryId: string
   githubRepositoryFullName?: string
   operatorBearerSecret: string
+  runnerCredentialId?: string
+  runnerCredentialSecret?: string
+  messagePublisher?: OrnnMessagePublisher
+}
+
+export interface OrnnMessagePublisher {
+  reconcile(input: { repository: string; issueNumber: number; effectKey: string; body: string; githubCommentId?: string }): Promise<{ githubCommentId: string } | undefined>
+  create(input: { repository: string; issueNumber: number; effectKey: string; body: string }): Promise<{ githubCommentId: string }>
+  update(input: { repository: string; githubCommentId: string; effectKey: string; body: string }): Promise<void>
 }
 
 type DeliveryInput = {
@@ -53,12 +71,16 @@ export type JobInspection = {
   }
   job: {
     id: string
-    state: 'pending'
+    state: 'pending' | 'leased' | 'succeeded'
     flow: { id: 'analyze'; versionId: string }
     policy: { versionId: string }
     createdAt: string
   }
   events: EventRecord[]
+  message?: OrnnMessageState
+  artifact?: AnalysisArtifact
+  executionOutcome?: ExecutionOutcome
+  cleanupStatus?: CleanupStatus
 }
 
 type Admission = {
@@ -71,12 +93,27 @@ type Admission = {
 export interface InvocationStore {
   admit(delivery: DeliveryInput): Promise<Admission | { conflict: true }>
   inspectJob(jobId: string): Promise<JobInspection | undefined>
+  inspectMessage?(ornnMessageId: string): Promise<JobInspection | undefined>
+  authenticateRunner?(runnerId: string, credentialDigest: string): Promise<boolean>
+  pollRunner?(runnerId: string): Promise<LeaseGrant | undefined>
+  heartbeatLease?(input: LeaseInput): Promise<boolean>
+  completeLease?(input: LeaseInput & { artifact: AnalysisArtifact }): Promise<'accepted' | 'invalid_artifact'>
+  recordMessagePublication?(jobId: string, update: { githubCommentId?: string; attempt: OrnnMessageState['latestAttempt'] }): Promise<void>
 }
+
+type LeaseInput = { runnerId: string; jobId: string; leaseToken: string }
 
 export function createControlPlane(options: ControlPlaneOptions) {
   const operatorCredential = operatorCredentialBytes(options.operatorBearerSecret)
   if (!operatorCredential) {
     throw new Error('OPERATOR_BEARER_SECRET must contain exactly 256 bits')
+  }
+  const runnerCredential = options.runnerCredentialSecret === undefined ? undefined : runnerCredentialBytes(options.runnerCredentialSecret)
+  if ((options.runnerCredentialId === undefined) !== (runnerCredential === undefined)) {
+    throw new Error('RUNNER_CREDENTIAL_ID and RUNNER_CREDENTIAL_SECRET must be configured together')
+  }
+  if (options.runnerCredentialSecret !== undefined && !runnerCredential) {
+    throw new Error('RUNNER_CREDENTIAL_SECRET must contain exactly 256 bits')
   }
 
   return {
@@ -84,6 +121,11 @@ export function createControlPlane(options: ControlPlaneOptions) {
       const url = new URL(request.url)
       if (request.method === 'POST' && url.pathname === '/api/v1/github/webhook') {
         return admitGitHubDelivery(request, options)
+      }
+
+      const runnerMatch = /^\/api\/v1\/runner\/(poll|heartbeat|result)$/.exec(url.pathname)
+      if (request.method === 'POST' && runnerMatch) {
+        return handleRunnerRequest(request, runnerMatch[1] as 'poll' | 'heartbeat' | 'result', options, runnerCredential)
       }
 
       const jobMatch = /^\/api\/v1\/jobs\/([^/]+)$/.exec(url.pathname)
@@ -104,9 +146,83 @@ export function createControlPlane(options: ControlPlaneOptions) {
         }, 200, { 'Cache-Control': 'no-store' })
       }
 
+      const messageMatch = /^\/api\/v1\/messages\/([^/]+)$/.exec(url.pathname)
+      if (request.method === 'GET' && messageMatch) {
+        if (!(await isAuthenticatedOperator(request, operatorCredential))) {
+          return json({ apiVersion: API_VERSION, error: { code: 'operator_unauthorized' } }, 401)
+        }
+        const inspection = options.store.inspectMessage && await options.store.inspectMessage(decodeURIComponent(messageMatch[1]))
+        if (!inspection) return json({ apiVersion: API_VERSION, error: { code: 'message_not_found' } }, 404)
+        return json({ apiVersion: API_VERSION, principal: 'operator:bjesuiter', ...inspection }, 200, { 'Cache-Control': 'no-store' })
+      }
+
       return json({ apiVersion: API_VERSION, error: { code: 'route_not_found' } }, 404)
     },
   }
+}
+
+async function handleRunnerRequest(
+  request: Request,
+  operation: 'poll' | 'heartbeat' | 'result',
+  options: ControlPlaneOptions,
+  expectedCredential: Uint8Array | undefined,
+): Promise<Response> {
+  const runnerId = request.headers.get('x-ornn-runner-id')
+  const authorization = request.headers.get('authorization')
+  const providedCredential = authorization?.startsWith('Bearer ')
+    ? runnerCredentialBytes(authorization.slice('Bearer '.length))
+    : undefined
+  if (!runnerId || runnerId !== options.runnerCredentialId || !expectedCredential || !providedCredential ||
+    !constantTimeEqual(await digest(providedCredential), await digest(expectedCredential)) ||
+    !options.store.authenticateRunner ||
+    !(await options.store.authenticateRunner(runnerId, await sha256Bytes(providedCredential)))) {
+    return runnerJson(envelope('lease.rejected', { code: 'runner_unauthorized' }), 401)
+  }
+
+  let body: unknown
+  try {
+    body = await request.json()
+  } catch {
+    return runnerJson(envelope('lease.rejected', { code: 'invalid_artifact' }), 400)
+  }
+  const parsed = parseRunnerEnvelope(body)
+  if (!parsed.ok) {
+    if (parsed.code === 'unsupported_major') {
+      return runnerJson(envelope('protocol.unsupported', { supportedMajor: 1 }), 426)
+    }
+    return runnerJson(envelope('lease.rejected', { code: 'invalid_artifact' }), 400)
+  }
+  if (parsed.value.type !== `runner.${operation}` || parsed.value.payload.runnerId !== runnerId) {
+    return runnerJson(envelope('lease.rejected', { code: 'lease_invalid' }), 403)
+  }
+
+  if (operation === 'poll') {
+    const lease = options.store.pollRunner ? await options.store.pollRunner(runnerId) : undefined
+    return runnerJson(lease ? envelope('runner.lease', lease) : envelope('runner.no_work', { retryAfterSeconds: 5 }))
+  }
+  const leaseInput = parsed.value.payload
+  if (typeof leaseInput.jobId !== 'string' || typeof leaseInput.leaseToken !== 'string') {
+    return runnerJson(envelope('lease.rejected', { code: 'lease_invalid' }), 403)
+  }
+  if (operation === 'heartbeat') {
+    const accepted = options.store.heartbeatLease && await options.store.heartbeatLease({ runnerId, jobId: leaseInput.jobId, leaseToken: leaseInput.leaseToken })
+    return accepted
+      ? runnerJson(envelope('lease.accepted', { jobId: leaseInput.jobId }))
+      : runnerJson(envelope('lease.rejected', { code: 'lease_invalid' }), 403)
+  }
+  if (!isAnalysisArtifact(leaseInput.artifact)) {
+    return runnerJson(envelope('lease.rejected', { code: 'invalid_artifact' }), 422)
+  }
+  const completed = await options.store.completeLease?.({
+    runnerId,
+    jobId: leaseInput.jobId,
+    leaseToken: leaseInput.leaseToken,
+    artifact: leaseInput.artifact,
+  })
+  if (completed === 'accepted') await publishMessage(options, leaseInput.jobId)
+  return completed === 'accepted'
+    ? runnerJson(envelope('lease.accepted', { jobId: leaseInput.jobId }))
+    : runnerJson(envelope('lease.rejected', { code: 'lease_invalid' }), 403)
 }
 
 async function admitGitHubDelivery(
@@ -165,12 +281,56 @@ async function admitGitHubDelivery(
     return json({ apiVersion: API_VERSION, error: { code: 'delivery_identity_conflict' } }, 409)
   }
 
-  return json({
+  const response = json({
     apiVersion: API_VERSION,
     invocationId: admitted.invocationId,
     jobId: admitted.jobId,
     replayed: !admitted.created,
   }, admitted.created ? 201 : 200)
+  if (admitted.created) await publishMessage(options, admitted.jobId)
+  return response
+}
+
+async function publishMessage(options: ControlPlaneOptions, jobId: string): Promise<void> {
+  if (!options.messagePublisher || !options.store.recordMessagePublication) return
+  const inspection = await options.store.inspectJob(jobId)
+  if (!inspection?.message) return
+  const { message } = inspection
+  try {
+    const body = renderMessage(inspection)
+    const reconciled = await options.messagePublisher.reconcile({
+      repository: inspection.invocation.github.repository.fullName,
+      issueNumber: inspection.invocation.github.issue.number,
+      effectKey: message.effectKey,
+      githubCommentId: message.githubCommentId,
+      body,
+    })
+    if (reconciled) {
+      await options.store.recordMessagePublication(jobId, { githubCommentId: reconciled.githubCommentId, attempt: 'succeeded' })
+      return
+    }
+    if (message.githubCommentId) {
+      await options.messagePublisher.update({ repository: inspection.invocation.github.repository.fullName, githubCommentId: message.githubCommentId, effectKey: message.effectKey, body })
+      await options.store.recordMessagePublication(jobId, { githubCommentId: message.githubCommentId, attempt: 'succeeded' })
+      return
+    }
+    const created = await options.messagePublisher.create({
+      repository: inspection.invocation.github.repository.fullName,
+      issueNumber: inspection.invocation.github.issue.number,
+      effectKey: message.effectKey,
+      body,
+    })
+    await options.store.recordMessagePublication(jobId, { githubCommentId: created.githubCommentId, attempt: 'succeeded' })
+  } catch {
+    await options.store.recordMessagePublication(jobId, { githubCommentId: message.githubCommentId, attempt: 'uncertain' })
+  }
+}
+
+function renderMessage(inspection: JobInspection): string {
+  const status = inspection.job.state === 'succeeded'
+    ? `completed: ${inspection.artifact?.summary ?? 'Analysis completed'}`
+    : 'accepted and waiting for a Runner.'
+  return `Ornn Analyze Job ${status}\n\nOrnn message ID: \`${inspection.message?.id}\`\n<!-- ornn-effect:${inspection.message?.effectKey} -->`
 }
 
 function parseIssueComment(body: string): Omit<DeliveryInput, 'deliveryId' | 'bodySha256'> | undefined {
@@ -306,6 +466,10 @@ function operatorCredentialBytes(value: string): Uint8Array | undefined {
   }
 }
 
+function runnerCredentialBytes(value: string): Uint8Array | undefined {
+  return operatorCredentialBytes(value)
+}
+
 async function digest(value: Uint8Array): Promise<ArrayBuffer> {
   return crypto.subtle.digest('SHA-256', value as unknown as BufferSource)
 }
@@ -322,6 +486,10 @@ function constantTimeEqual(left: ArrayBuffer, right: ArrayBuffer): boolean {
 
 function json(value: unknown, status: number, headers: HeadersInit = {}): Response {
   return Response.json(value, { status, headers: { 'content-type': 'application/json; charset=utf-8', ...headers } })
+}
+
+function runnerJson(value: unknown, status = 200): Response {
+  return json(value, status, { 'Cache-Control': 'no-store' })
 }
 
 function hexToBytes(hex: string): Uint8Array | undefined {
@@ -364,6 +532,13 @@ type StoredRecord = { delivery: DeliveryInput; inspection: JobInspection; events
 export function createInMemoryInvocationStore(): InvocationStore {
   const recordsByDelivery = new Map<string, StoredRecord>()
   const inspectionsByJob = new Map<string, JobInspection>()
+  const runnerCredentials = new Map<string, string>()
+  const leasesByJob = new Map<string, {
+    runnerId: string
+    tokenDigest: string
+    generation: number
+    expiresAt: string
+  }>()
   return {
     async admit(delivery) {
       const existing = recordsByDelivery.get(delivery.deliveryId)
@@ -389,7 +564,79 @@ export function createInMemoryInvocationStore(): InvocationStore {
     async inspectJob(jobId) {
       return inspectionsByJob.get(jobId)
     },
+    async inspectMessage(ornnMessageId) {
+      return [...inspectionsByJob.values()].find((inspection) => inspection.message?.id === ornnMessageId)
+    },
+    async authenticateRunner(runnerId, credentialDigest) {
+      const existing = runnerCredentials.get(runnerId)
+      if (existing === undefined) {
+        runnerCredentials.set(runnerId, credentialDigest)
+        return true
+      }
+      return existing === credentialDigest
+    },
+    async pollRunner(runnerId) {
+      if ([...leasesByJob.values()].some((lease) => lease.runnerId === runnerId)) return undefined
+      const inspection = [...inspectionsByJob.values()].find((candidate) => candidate.job.state === 'pending')
+      if (!inspection) return undefined
+      const token = opaqueId('lease')
+      const expiresAt = new Date(Date.now() + 60_000).toISOString()
+      const generation = 1
+      leasesByJob.set(inspection.job.id, { runnerId, tokenDigest: await sha256(token), generation, expiresAt })
+      inspection.job.state = 'leased'
+      inspection.events.push({ id: opaqueId('evt'), type: 'job.leased', revision: String(inspection.events.length + 1), occurredAt: new Date().toISOString() })
+      return {
+        jobId: inspection.job.id,
+        leaseToken: token,
+        generation,
+        expiresAt,
+        workOrder: {
+          issueNumber: inspection.invocation.github.issue.number,
+          title: inspection.invocation.github.issue.title,
+          body: inspection.invocation.github.issue.body,
+          comment: inspection.invocation.github.comment.body,
+        },
+      }
+    },
+    async heartbeatLease(input) {
+      const lease = await matchingLease(leasesByJob, input)
+      if (!lease) return false
+      lease.expiresAt = new Date(Date.now() + 60_000).toISOString()
+      return true
+    },
+    async completeLease(input) {
+      const lease = await matchingLease(leasesByJob, input)
+      if (!lease) return 'invalid_artifact'
+      const inspection = inspectionsByJob.get(input.jobId)
+      if (!inspection) return 'invalid_artifact'
+      inspection.job.state = 'succeeded'
+      inspection.artifact = input.artifact
+      inspection.executionOutcome = { status: 'succeeded', completedAt: new Date().toISOString() }
+      inspection.cleanupStatus = { status: 'verified', updatedAt: inspection.executionOutcome.completedAt }
+      if (inspection.message) {
+        inspection.message.revision += 1
+        inspection.message.latestAttempt = 'pending'
+      }
+      inspection.events.push({ id: opaqueId('evt'), type: 'job.succeeded', revision: String(inspection.events.length + 1), occurredAt: inspection.executionOutcome.completedAt })
+      leasesByJob.delete(input.jobId)
+      return 'accepted'
+    },
+    async recordMessagePublication(jobId, update) {
+      const message = inspectionsByJob.get(jobId)?.message
+      if (!message) return
+      message.githubCommentId = update.githubCommentId
+      message.latestAttempt = update.attempt
+    },
   }
+}
+
+async function matchingLease(
+  leases: Map<string, { runnerId: string; tokenDigest: string; generation: number; expiresAt: string }>,
+  input: LeaseInput,
+) {
+  const lease = leases.get(input.jobId)
+  if (!lease || lease.runnerId !== input.runnerId || lease.expiresAt <= new Date().toISOString()) return undefined
+  return lease.tokenDigest === await sha256(input.leaseToken) ? lease : undefined
 }
 
 async function buildRecord(delivery: DeliveryInput): Promise<StoredRecord> {
@@ -433,6 +680,12 @@ async function buildRecord(delivery: DeliveryInput): Promise<StoredRecord> {
         createdAt,
       },
       events: events.slice(2),
+      message: {
+        id: opaqueId('om'),
+        revision: 1,
+        effectKey: `github-message:${jobId}`,
+        latestAttempt: 'pending',
+      },
     },
   }
 }
@@ -498,6 +751,14 @@ class D1InvocationStore implements InvocationStore {
         job.id, JOB_SCHEMA_VERSION, invocation.id, job.state, job.flow.id, job.flow.versionId,
         job.policy.versionId, job.createdAt, delivery.deliveryId, invocation.id,
       ),
+      this.database.prepare(`INSERT INTO ornn_messages (
+        message_id, job_id, revision, effect_key, latest_attempt, created_at, updated_at
+      ) SELECT ?, ?, ?, ?, ?, ?, ?
+      WHERE (SELECT job_id FROM deliveries WHERE github_delivery_id = ?) = ?`).bind(
+        record.inspection.message?.id, job.id, record.inspection.message?.revision,
+        record.inspection.message?.effectKey, record.inspection.message?.latestAttempt,
+        job.createdAt, job.createdAt, delivery.deliveryId, job.id,
+      ),
       ...eventStatements,
     ])
 
@@ -517,14 +778,22 @@ class D1InvocationStore implements InvocationStore {
   async inspectJob(jobId: string): Promise<JobInspection | undefined> {
     const row = await this.database.prepare(`SELECT
       j.job_id, j.state, j.flow_id, j.flow_version_id, j.policy_version_id AS job_policy_version_id,
-      j.created_at AS job_created_at, i.invocation_id, i.github_delivery_id,
+      j.created_at AS job_created_at, j.execution_status, j.execution_completed_at, j.cleanup_status, j.cleanup_updated_at,
+      m.message_id, m.revision AS message_revision, m.effect_key, m.github_comment_id AS github_message_comment_id, m.latest_attempt,
+      a.artifact_json, i.invocation_id, i.github_delivery_id,
       i.github_installation_id, i.github_repository_id, i.github_repository_full_name,
       i.github_issue_number, i.github_issue_title, i.github_issue_body, i.github_comment_id,
       i.github_comment_body, i.github_actor, i.policy_version_id AS invocation_policy_version_id,
       i.created_at AS invocation_created_at
       FROM jobs j JOIN invocations i ON i.invocation_id = j.invocation_id
+      LEFT JOIN ornn_messages m ON m.job_id = j.job_id
+      LEFT JOIN analysis_artifacts a ON a.job_id = j.job_id
       WHERE j.job_id = ?`).bind(jobId).first<{
-        job_id: string; state: 'pending'; flow_id: 'analyze'; flow_version_id: string; job_policy_version_id: string; job_created_at: string
+        job_id: string; state: 'pending' | 'leased' | 'succeeded'; flow_id: 'analyze'; flow_version_id: string; job_policy_version_id: string; job_created_at: string
+        execution_status: 'succeeded' | null; execution_completed_at: string | null
+        cleanup_status: CleanupStatus['status'] | null; cleanup_updated_at: string | null
+        message_id: string | null; message_revision: number | null; effect_key: string | null; github_message_comment_id: string | null; latest_attempt: OrnnMessageState['latestAttempt'] | null
+        artifact_json: string | null
         invocation_id: string; github_delivery_id: string; github_installation_id: string; github_repository_id: string; github_repository_full_name: string
         github_issue_number: number; github_issue_title: string; github_issue_body: string; github_comment_id: string; github_comment_body: string; github_actor: string
         invocation_policy_version_id: string; invocation_created_at: string
@@ -535,6 +804,7 @@ class D1InvocationStore implements InvocationStore {
       ORDER BY revision ASC`).bind(row.job_id).all<{
         event_id: string; event_type: string; revision: number; created_at: string
       }>()
+    const artifact = row.artifact_json === null ? undefined : JSON.parse(row.artifact_json) as AnalysisArtifact
     return {
       invocation: {
         id: row.invocation_id,
@@ -562,6 +832,129 @@ class D1InvocationStore implements InvocationStore {
         revision: String(event.revision),
         occurredAt: event.created_at,
       })),
+      message: row.message_id === null || row.message_revision === null || row.effect_key === null || row.latest_attempt === null
+        ? undefined
+        : { id: row.message_id, revision: row.message_revision, effectKey: row.effect_key, githubCommentId: row.github_message_comment_id ?? undefined, latestAttempt: row.latest_attempt },
+      artifact,
+      executionOutcome: row.execution_status === null || row.execution_completed_at === null
+        ? undefined
+        : { status: row.execution_status, completedAt: row.execution_completed_at },
+      cleanupStatus: row.cleanup_status === null || row.cleanup_updated_at === null
+        ? undefined
+        : { status: row.cleanup_status, updatedAt: row.cleanup_updated_at },
     }
+  }
+
+  async inspectMessage(ornnMessageId: string): Promise<JobInspection | undefined> {
+    const row = await this.database.prepare('SELECT job_id FROM ornn_messages WHERE message_id = ?').bind(ornnMessageId).first<{ job_id: string }>()
+    return row ? this.inspectJob(row.job_id) : undefined
+  }
+
+  async authenticateRunner(_runnerId: string, _credentialDigest: string): Promise<boolean> {
+    const createdAt = new Date().toISOString()
+    await this.database.prepare(`INSERT INTO runner_credentials (runner_id, credential_digest, created_at)
+      VALUES (?, ?, ?) ON CONFLICT(runner_id) DO NOTHING`).bind(_runnerId, _credentialDigest, createdAt).run()
+    const stored = await this.database.prepare('SELECT credential_digest FROM runner_credentials WHERE runner_id = ?')
+      .bind(_runnerId).first<{ credential_digest: string }>()
+    return stored?.credential_digest === _credentialDigest
+  }
+
+  async pollRunner(runnerId: string): Promise<LeaseGrant | undefined> {
+    const heldLease = await this.database.prepare(`SELECT l.job_id FROM runner_leases l
+      JOIN jobs j ON j.job_id = l.job_id WHERE l.runner_id = ? AND j.state = 'leased'`).bind(runnerId).first()
+    if (heldLease) return undefined
+    const candidate = await this.database.prepare(`SELECT j.job_id, i.github_issue_number, i.github_issue_title,
+      i.github_issue_body, i.github_comment_body FROM jobs j JOIN invocations i ON i.invocation_id = j.invocation_id
+      WHERE j.state = 'pending' ORDER BY j.created_at ASC LIMIT 1`).first<{
+        job_id: string; github_issue_number: number; github_issue_title: string; github_issue_body: string; github_comment_body: string
+      }>()
+    if (!candidate) return undefined
+    const now = new Date().toISOString()
+    const leaseToken = opaqueId('lease')
+    const tokenDigest = await sha256(leaseToken)
+    const expiresAt = new Date(Date.now() + 60_000).toISOString()
+    const eventId = opaqueId('evt')
+    const eventPayload = canonicalJson({ jobId: candidate.job_id, runnerId, expiresAt })
+    const eventPayloadSha256 = await sha256(eventPayload)
+    await this.database.batch([
+      this.database.prepare(`INSERT INTO runner_leases (job_id, runner_id, generation, token_digest, expires_at, last_heartbeat_at, created_at)
+        SELECT ?, ?, 1, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'pending')`).bind(
+        candidate.job_id, runnerId, tokenDigest, expiresAt, now, now, candidate.job_id,
+      ),
+      this.database.prepare(`UPDATE jobs SET state = 'leased' WHERE job_id = ? AND state = 'pending'
+        AND EXISTS (SELECT 1 FROM runner_leases WHERE job_id = ? AND token_digest = ?)`).bind(candidate.job_id, candidate.job_id, tokenDigest),
+      this.database.prepare(`INSERT INTO domain_events (event_id, schema_version, stream_kind, stream_id, revision, event_type, payload_json, payload_sha256, created_at)
+        SELECT ?, ?, 'job', ?, 3, 'job.leased', ?, ?, ? WHERE EXISTS
+        (SELECT 1 FROM runner_leases WHERE job_id = ? AND token_digest = ?)`).bind(
+        eventId, EVENT_SCHEMA_VERSION, candidate.job_id, eventPayload, eventPayloadSha256, now, candidate.job_id, tokenDigest,
+      ),
+    ])
+    const persisted = await this.database.prepare(`SELECT generation FROM runner_leases WHERE job_id = ? AND runner_id = ? AND token_digest = ?`)
+      .bind(candidate.job_id, runnerId, tokenDigest).first<{ generation: number }>()
+    if (!persisted) return undefined
+    return {
+      jobId: candidate.job_id,
+      leaseToken,
+      generation: persisted.generation,
+      expiresAt,
+      workOrder: {
+        issueNumber: candidate.github_issue_number,
+        title: candidate.github_issue_title,
+        body: candidate.github_issue_body,
+        comment: candidate.github_comment_body,
+      },
+    }
+  }
+
+  async heartbeatLease(input: LeaseInput): Promise<boolean> {
+    const now = new Date().toISOString()
+    const expiry = new Date(Date.now() + 60_000).toISOString()
+    const tokenDigest = await sha256(input.leaseToken)
+    const result = await this.database.prepare(`UPDATE runner_leases SET expires_at = ?, last_heartbeat_at = ?
+      WHERE job_id = ? AND runner_id = ? AND token_digest = ? AND expires_at > ?
+      AND EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'leased')`).bind(
+      expiry, now, input.jobId, input.runnerId, tokenDigest, now, input.jobId,
+    ).run()
+    return result.meta.changes === 1
+  }
+
+  async completeLease(input: LeaseInput & { artifact: AnalysisArtifact }): Promise<'accepted' | 'invalid_artifact'> {
+    const artifactJson = canonicalJson(input.artifact)
+    if (new TextEncoder().encode(artifactJson).byteLength > 512 * 1024) return 'invalid_artifact'
+    const now = new Date().toISOString()
+    const tokenDigest = await sha256(input.leaseToken)
+    const validLease = await this.database.prepare(`SELECT 1 FROM jobs j JOIN runner_leases l ON l.job_id = j.job_id
+      WHERE j.job_id = ? AND j.state = 'leased' AND l.runner_id = ? AND l.token_digest = ? AND l.expires_at > ?`).bind(
+      input.jobId, input.runnerId, tokenDigest, now,
+    ).first()
+    if (!validLease) return 'invalid_artifact'
+    const eventPayload = canonicalJson({ jobId: input.jobId, result: input.artifact.kind })
+    const eventPayloadSha256 = await sha256(eventPayload)
+    await this.database.batch([
+      this.database.prepare(`UPDATE jobs SET state = 'succeeded', execution_status = 'succeeded', execution_completed_at = ?, cleanup_status = 'verified', cleanup_updated_at = ?
+        WHERE job_id = ? AND state = 'leased' AND EXISTS (SELECT 1 FROM runner_leases
+        WHERE job_id = ? AND runner_id = ? AND token_digest = ? AND expires_at > ?)`).bind(
+        now, now, input.jobId, input.jobId, input.runnerId, tokenDigest, now,
+      ),
+      this.database.prepare(`INSERT INTO analysis_artifacts (job_id, schema_version, artifact_json, created_at)
+        SELECT ?, 1, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'succeeded')
+        ON CONFLICT(job_id) DO NOTHING`).bind(input.jobId, artifactJson, now, input.jobId),
+      this.database.prepare(`INSERT INTO domain_events (event_id, schema_version, stream_kind, stream_id, revision, event_type, payload_json, payload_sha256, created_at)
+        SELECT ?, ?, 'job', ?, 4, 'job.succeeded', ?, ?, ? WHERE EXISTS
+        (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'succeeded')
+        ON CONFLICT(stream_kind, stream_id, revision) DO NOTHING`).bind(
+        opaqueId('evt'), EVENT_SCHEMA_VERSION, input.jobId, eventPayload, eventPayloadSha256, now, input.jobId,
+      ),
+      this.database.prepare(`UPDATE ornn_messages SET revision = revision + 1, latest_attempt = 'pending', updated_at = ?
+        WHERE job_id = ? AND EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'succeeded')`).bind(now, input.jobId, input.jobId),
+    ])
+    const completed = await this.database.prepare(`SELECT state FROM jobs WHERE job_id = ?`).bind(input.jobId)
+      .first<{ state: string }>()
+    return completed?.state === 'succeeded' ? 'accepted' : 'invalid_artifact'
+  }
+
+  async recordMessagePublication(jobId: string, update: { githubCommentId?: string; attempt: OrnnMessageState['latestAttempt'] }): Promise<void> {
+    await this.database.prepare(`UPDATE ornn_messages SET github_comment_id = COALESCE(?, github_comment_id), latest_attempt = ?, updated_at = ?
+      WHERE job_id = ?`).bind(update.githubCommentId ?? null, update.attempt, new Date().toISOString(), jobId).run()
   }
 }
