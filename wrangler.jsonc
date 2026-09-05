@@ -1,13 +1,19 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ornn-forge",
+  "account_id": "7e9734d5c0feea43997adfc4ca287008",
   "compatibility_date": "2026-07-10",
   "compatibility_flags": ["nodejs_compat"],
   "main": "@tanstack/react-start/server-entry",
+  "vars": {
+    "GITHUB_REPOSITORY_ID": "1296836371",
+    "GITHUB_REPOSITORY_FULL_NAME": "bjesuiter/ornn-forge"
+  },
   "d1_databases": [
     {
       "binding": "ORNN_D1",
       "database_name": "ornn-forge",
+      "database_id": "fc717be6-e8cc-4797-afa9-540b3dd482c5",
       "migrations_dir": "migrations"
     }
   ],
