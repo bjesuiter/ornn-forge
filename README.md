@@ -1,8 +1,11 @@
 # Ornn Forge
 
 The first control-plane slice admits a signed GitHub `issue_comment` delivery from
-`bjesuiter`, transactionally creates its Invocation and pending Analyze Job in D1,
-and exposes that Job to the single authenticated operator.
+`bjesuiter`, or an `issues` delivery where `bjesuiter` opens or edits an issue
+description to mention `ornn-forge`. It transactionally creates an Invocation and
+pending Analyze Job in D1, then exposes that Job to the single authenticated operator.
+
+The GitHub App must subscribe to both **Issue comment** and **Issues** events.
 
 ## D1 setup and deployed smoke check
 

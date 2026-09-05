@@ -7,12 +7,13 @@ const operatorSecret = 'o'.repeat(32)
 async function signedWebhookRequest(
   deliveryId: string,
   payload: Record<string, unknown>,
+  event = 'issue_comment',
 ) {
   const body = JSON.stringify(payload)
-  return signedRawWebhookRequest(deliveryId, new TextEncoder().encode(body))
+  return signedRawWebhookRequest(deliveryId, new TextEncoder().encode(body), event)
 }
 
-async function signedRawWebhookRequest(deliveryId: string, body: Uint8Array) {
+async function signedRawWebhookRequest(deliveryId: string, body: Uint8Array, event = 'issue_comment') {
   const key = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(webhookSecret),
@@ -31,7 +32,7 @@ async function signedRawWebhookRequest(deliveryId: string, body: Uint8Array) {
     headers: {
       'content-type': 'application/json',
       'x-github-delivery': deliveryId,
-      'x-github-event': 'issue_comment',
+      'x-github-event': event,
       'x-hub-signature-256': `sha256=${Buffer.from(signature).toString('hex')}`,
     },
     body: body as unknown as BodyInit,
@@ -46,6 +47,16 @@ function issueComment(actor = 'bjesuiter') {
     issue: { number: 22, title: 'Admit one', body: 'Please analyze this.' },
     comment: { id: 123, body: '@ornn analyze', user: { login: actor } },
     sender: { login: actor },
+  }
+}
+
+function issueOpened(body = 'Please ask @ornn-forge to analyze this.') {
+  return {
+    action: 'opened',
+    installation: { id: 42 },
+    repository: { id: 99, full_name: 'bjesuiter/ornn-forge' },
+    issue: { id: 456, number: 23, title: 'Analyze this issue', body },
+    sender: { login: 'bjesuiter' },
   }
 }
 
@@ -90,6 +101,103 @@ test('admits one signed delivery and lets the operator inspect its pending Analy
     { id: expect.stringMatching(/^evt_v1_/), type: 'job.pending', revision: '2' },
   ])
   expect(inspection.events).toHaveLength(2)
+})
+
+test('admits an Issue opened with an @ornn-forge mention in its description', async () => {
+  const app = createControlPlane({
+    store: createInMemoryInvocationStore(),
+    githubWebhookSecret: webhookSecret,
+    githubInstallationId: '42',
+    githubRepositoryId: '99',
+    githubRepositoryFullName: 'bjesuiter/ornn-forge',
+    operatorBearerSecret: operatorSecret,
+  })
+
+  const admitted = await app.fetch(await signedWebhookRequest('delivery-description-1', issueOpened(), 'issues'))
+
+  expect(admitted.status).toBe(201)
+  const accepted = await admitted.json() as { jobId: string }
+  const inspected = await app.fetch(new Request(`https://ornn.example/api/v1/jobs/${accepted.jobId}`, {
+    headers: { authorization: `Bearer ${operatorSecret}` },
+  }))
+  expect(await inspected.json()).toMatchObject({
+    invocation: {
+      github: {
+        issue: { number: 23, body: 'Please ask @ornn-forge to analyze this.' },
+        comment: { id: 'issue-description:456:delivery-description-1', body: 'Please ask @ornn-forge to analyze this.' },
+      },
+    },
+  })
+})
+
+test('admits an Issue opened with a bare ornn-forge mention in its description', async () => {
+  const app = createControlPlane({
+    store: createInMemoryInvocationStore(),
+    githubWebhookSecret: webhookSecret,
+    githubInstallationId: '42',
+    githubRepositoryId: '99',
+    operatorBearerSecret: operatorSecret,
+  })
+
+  const admitted = await app.fetch(await signedWebhookRequest(
+    'delivery-description-bare-1',
+    issueOpened('Please have ornn-forge analyze this.'),
+    'issues',
+  ))
+
+  expect(admitted.status).toBe(201)
+})
+
+test('admits an Issue after its description is edited to mention @ornn-forge', async () => {
+  const app = createControlPlane({
+    store: createInMemoryInvocationStore(),
+    githubWebhookSecret: webhookSecret,
+    githubInstallationId: '42',
+    githubRepositoryId: '99',
+    operatorBearerSecret: operatorSecret,
+  })
+  const payload = {
+    ...issueOpened(),
+    action: 'edited',
+    changes: { body: { from: 'A normal issue description.' } },
+  }
+
+  const admitted = await app.fetch(await signedWebhookRequest('delivery-description-3', payload, 'issues'))
+
+  expect(admitted.status).toBe(201)
+})
+
+test('admits an edited Issue when GitHub omits change metadata', async () => {
+  const app = createControlPlane({
+    store: createInMemoryInvocationStore(),
+    githubWebhookSecret: webhookSecret,
+    githubInstallationId: '42',
+    githubRepositoryId: '99',
+    operatorBearerSecret: operatorSecret,
+  })
+  const payload = { ...issueOpened(), action: 'edited' }
+
+  const admitted = await app.fetch(await signedWebhookRequest('delivery-description-4', payload, 'issues'))
+
+  expect(admitted.status).toBe(201)
+})
+
+test('ignores Issues that do not mention @ornn-forge in their description', async () => {
+  const app = createControlPlane({
+    store: createInMemoryInvocationStore(),
+    githubWebhookSecret: webhookSecret,
+    githubInstallationId: '42',
+    githubRepositoryId: '99',
+    operatorBearerSecret: operatorSecret,
+  })
+
+  const ignored = await app.fetch(await signedWebhookRequest(
+    'delivery-description-2',
+    issueOpened('A normal issue description.'),
+    'issues',
+  ))
+
+  expect(ignored.status).toBe(202)
 })
 
 test('replays an identical delivery and rejects the same identity with a different body', async () => {

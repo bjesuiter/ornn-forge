@@ -125,7 +125,16 @@ async function admitGitHubDelivery(
     return json({ apiVersion: API_VERSION, error: { code: 'invalid_payload' } }, 400)
   }
 
-  if (request.headers.get('x-github-event') !== 'issue_comment') {
+  const event = request.headers.get('x-github-event')
+  const parsed = event === 'issue_comment'
+    ? parseIssueComment(body)
+    : event === 'issues'
+      ? parseIssueDescription(body)
+      : undefined
+  if (parsed === 'ignored') {
+    return json({ apiVersion: API_VERSION, ignored: true }, 202)
+  }
+  if (!parsed && event !== 'issue_comment' && event !== 'issues') {
     return json({ apiVersion: API_VERSION, error: { code: 'unsupported_event' } }, 422)
   }
 
@@ -134,7 +143,6 @@ async function admitGitHubDelivery(
     return json({ apiVersion: API_VERSION, error: { code: 'invalid_delivery' } }, 400)
   }
 
-  const parsed = parseIssueComment(body)
   if (!parsed) {
     return json({ apiVersion: API_VERSION, error: { code: 'invalid_payload' } }, 400)
   }
@@ -149,6 +157,7 @@ async function admitGitHubDelivery(
 
   const admitted = await options.store.admit({
     ...parsed,
+    ...(event === 'issues' ? { commentId: `${parsed.commentId}:${deliveryId}` } : {}),
     deliveryId,
     bodySha256: await sha256Bytes(rawBody),
   })
@@ -202,6 +211,52 @@ function parseIssueComment(body: string): Omit<DeliveryInput, 'deliveryId' | 'bo
     commentBody,
     actor: senderLogin,
   }
+}
+
+function parseIssueDescription(body: string): Omit<DeliveryInput, 'deliveryId' | 'bodySha256'> | 'ignored' | undefined {
+  let payload: unknown
+  try {
+    payload = JSON.parse(body)
+  } catch {
+    return undefined
+  }
+  if (!isObject(payload) || !isObject(payload.installation) || !isObject(payload.repository) || !isObject(payload.issue) || !isObject(payload.sender)) {
+    return undefined
+  }
+  if (payload.action !== 'opened' && payload.action !== 'edited') {
+    return 'ignored'
+  }
+
+  const issueBody = asBoundedString(payload.issue.body)
+  if (!issueBody || !containsOrnnMention(issueBody)) return 'ignored'
+
+  const installationId = asIdentifier(payload.installation.id)
+  const repositoryId = asIdentifier(payload.repository.id)
+  const repositoryFullName = asBoundedString(payload.repository.full_name)
+  const issueId = asIdentifier(payload.issue.id)
+  const issueNumber = payload.issue.number
+  const issueTitle = asBoundedString(payload.issue.title)
+  const senderLogin = asBoundedString(payload.sender.login)
+
+  if (!installationId || !repositoryId || !repositoryFullName || !issueId || !isPositiveSafeInteger(issueNumber) || issueTitle === undefined || !senderLogin) {
+    return undefined
+  }
+
+  return {
+    installationId,
+    repositoryId,
+    repositoryFullName,
+    issueNumber,
+    issueTitle,
+    issueBody,
+    commentId: `issue-description:${issueId}`,
+    commentBody: issueBody,
+    actor: senderLogin,
+  }
+}
+
+function containsOrnnMention(value: string): boolean {
+  return /(?:^|[^\w-])@?ornn-forge\b/i.test(value)
 }
 
 function asIdentifier(value: unknown): string | undefined {
