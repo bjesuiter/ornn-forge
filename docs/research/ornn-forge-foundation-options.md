@@ -13,6 +13,11 @@ The decision sought is a build-ready direction for a production-grade first slic
 - [Control-plane portability and telemetry](./control-plane-portability-and-telemetry.md)
 - [Embedded Runner with Pi and Daytona on Cloudflare](./embedded-runner-pi-daytona-cloudflare.md)
 - [GitHub App token scope and branch restrictions](./github-app-token-branch-scope.md)
+- [Pi anonymous web-fetch extension](./pi-anonymous-web-fetch.md)
+- [OpenCode Zen router benchmark](./opencode-go-router-benchmark.md)
+- [Cloudflare Workers AI router benchmark](./cloudflare-workers-ai-router-benchmark.md)
+- [Runner credential storage and reauthentication](./runner-credential-storage-and-reauthentication.md)
+- [Analyze Flow sandbox failure and cleanup](./analyze-flow-sandbox-failure-and-cleanup.md)
 
 ## Resolved decisions
 
@@ -20,6 +25,9 @@ The decision sought is a build-ready direction for a production-grade first slic
 - [Select the first agent engine and sandbox runner](https://github.com/bjesuiter/ornn-forge/issues/6): Start with a Pi-powered Remote Runner on `homeserv1` and local Docker; prove Codex next, then an Embedded Runner with Daytona's managed API.
 - [Validate an Embedded Runner with Pi and Daytona on Cloudflare](https://github.com/bjesuiter/ornn-forge/issues/14): Do not approve the Embedded Runner as specified. The lower-level Pi core and Daytona provider run in a Worker probe, but personal ChatGPT subscription automation, Pi's Worker OAuth path, bounded background duration, and Daytona cancellation and verified deletion do not meet the production contract.
 - [Decide whether a temporary bridge earns its removal cost](https://github.com/bjesuiter/ornn-forge/issues/10): Do not adopt a temporary full-solution bridge. Keep publication as an explicitly authorized Ornn effect; ADR 0006 later chose a direct initial provider that does not isolate the GitHub credential from the sandbox.
+- [Select the first Pi anonymous web-fetch extension](https://github.com/bjesuiter/ornn-forge/issues/15): Pin `code-yeongyu/pi-webfetch` to commit `ee045140cbaa784eec420bc0a7bc7d7eec0b7043`, accepting its missing private-network and DNS-rebinding defenses for the personal first version.
+- [Select Runner credential storage and reauthentication](https://github.com/bjesuiter/ornn-forge/issues/18): Keep reusable credentials on each Runner, encrypt Pi's mutable OAuth record with a systemd-provided host key, and relay only device-authorization interaction data through the control plane.
+- [Define sandbox failure and cleanup behavior](https://github.com/bjesuiter/ornn-forge/issues/19): Use seven stable error codes plus effect certainty, cancel the whole Job container, and release capacity only after owned resources are verified absent.
 
 ## Current synthesis
 
@@ -75,11 +83,11 @@ This is the evidence-backed starting point for the open architecture decisions. 
 - The only initially authorized GitHub actor is `bjesuiter`.
 - The GitHub App may operate on every repository to which it is installed. Repository ownership does not grant invocation authority to other users.
 - The initial agent engine is Pi using the user's OpenAI subscription. Codex is the first real replacement proof, and the available OpenAI model variant should be selectable at runtime.
-- The control plane hosts the Runner reauthentication experience but never receives a reusable OpenAI credential. Each Runner independently starts device authorization, exposes only the verification URL, one-time code, expiry, and status through the control plane, and stores and refreshes its own credential. Credentials are not copied between Runners.
-- The web research capability will reuse pinned Runner-hosted agent tools and, later, a reviewed Pi MCP adapter rather than an Ornn-built search implementation. Only operator-approved Runner configuration may expose MCP servers; repository-provided MCP configuration is ignored.
-- The first web research implementation exposes only anonymous `web_fetch` through a pinned and reviewed Pi extension. It must pass contract tests for private-address blocking, DNS rebinding, redirects, response limits, timeouts, and cancellation. Exa search and MCP integration follow later.
+- The control plane hosts the Runner reauthentication experience but never receives a reusable OpenAI credential. Each Runner independently starts device authorization and exposes only the verification URL, one-time code, expiry, and status through the control plane. On `homeserv1`, systemd encrypted credentials provide a host-key-encrypted store key to the Runner service, and an Ornn implementation of Pi's `CredentialStore` encrypts and atomically replaces the mutable OAuth record. The current unencrypted root disk leaves root and offline disk theft outside the v1 boundary. See [the credential-storage research](./runner-credential-storage-and-reauthentication.md).
+- The web research capability uses Runner-hosted tools and, later, a reviewed Pi MCP adapter. Only operator-approved Runner configuration may expose MCP servers; repository-provided MCP configuration is ignored.
+- The first anonymous web-fetch provider is the existing MIT-licensed `code-yeongyu/pi-webfetch`, pinned to commit `ee045140cbaa784eec420bc0a7bc7d7eec0b7043`. It registers one supplied-URL tool, needs no credential, and bounds time, response size, and model-facing output. Its lack of private-network blocking, DNS pinning, and an explicit untrusted-content envelope is accepted for the personal first version and recorded in the Flow integration. Exa search and MCP integration follow later. See [the extension assessment](./pi-anonymous-web-fetch.md).
 - An authorized invocation is routed to a registered flow by a model, not by fixed command keywords. The router receives the flow catalog, issue title and body, invoking comment, and authorized clarification replies. It must return either a selected registered flow with requested overrides or a concrete clarification question; numeric confidence does not authorize execution.
-- The first control-plane flow router uses TanStack AI with OpenCode Go behind an Ornn-owned provider interface. The Go API key stays in a Worker secret, Zen balance fallback remains disabled, and production use requires confirmation that unattended internal routing complies with OpenCode's hosted-service terms. A contract benchmark will compare `glm-5.3-flash`, `mimo-v2.5`, and `deepseek-v4-flash` before pinning the initial model. See [the routing-provider research](./opencode-zen-go-tanstack-ai-routing.md).
+- The first control-plane flow router uses TanStack AI with paid OpenCode Zen behind an Ornn-owned provider interface. Pin `gemini-3.5-flash-lite`: it passed 28 of 28 routing-contract attempts with a 0.864-second median and a measured mean cost of $0.000180 per route. The API key stays in a Worker secret, and the operator configures pay-as-you-go spending limits. Cloudflare Workers AI is the simpler native integration, but its only perfect tested candidate, `@cf/nvidia/nemotron-3-120b-a12b`, was 4.5 times slower at the median and 3.7 times the measured route cost. Retain Nemotron as a tested provider fallback rather than the initial pin. Production use also requires confirmation that unattended internal routing complies with OpenCode's hosted-service terms. See [the Zen contract benchmark](./opencode-go-router-benchmark.md) and [Workers AI comparison](./cloudflare-workers-ai-router-benchmark.md).
 - A clarification question includes a visible short invocation reference. A reply from the authorized invoker resumes the sole pending interaction without another mention or explicit reference. When several interactions are pending on one issue, the reply must include the reference. A later dashboard should host these interactions when comment traffic becomes unwieldy.
 - Every GitHub comment published by Ornn is an Ornn message with a compact self-link whose visible text is its opaque Ornn message ID, such as `om_01K...`. D1 maps the ID to structured message content and related Invocations, Jobs, interactions, and artifacts. Workflow state may reference the ID, but D1 remains authoritative. The public ID grants no authority. An authorized Invocation may use it as an anchor for resolving related objects. The control plane queries deterministic candidates before model interpretation and asks when the relation remains ambiguous. In the first slice, only the control plane acting for an authenticated operator Invocation or UI session, and a Runner within its current Job lease, may resolve the structured record.
 - A Job starts only after Flow routing succeeds and allowed overrides are resolved. Routing clarification does not consume Runner capacity or create an agent session or sandbox.
@@ -103,6 +111,7 @@ This is the evidence-backed starting point for the open architecture decisions. 
 - The first implementation should arrive in days rather than weeks, but speed does not outrank control, security, or stability.
 - Production-grade means reliable operation by one operator. It requires a secure authenticated entrance, strict invocation authorization, inspectable job state, and a minimal useful telemetry set. Cloudflare supplies availability for its underlying services, so Ornn does not need its own high-availability system in the first slice.
 - The first path uses a Remote Runner on `homeserv1`, one Pi session and one Docker sandbox per job, configurable Runner capacity, and authenticated outbound HTTPS polling.
+- The Docker sandbox contract uses seven stable errors plus effect certainty, deterministic owned container identity, whole-container cancellation, and verified absence before releasing capacity. Inline cleanup runs for 60 seconds, then quarantines the resource and leaves the reaper to continue until verification succeeds. No additional service is required. See [the failure and cleanup research](./analyze-flow-sandbox-failure-and-cleanup.md).
 - The first slice uses exactly one Pi session per Job. Agent-level parallel and dependent work can be added later without changing the Job boundary.
 - Every sandbox provides its standard execution environment, toolchain, and pinned repository workspace as prerequisites. Ornn does not model those basics as Capability grants; grants govern extra agent abilities and external effects.
 - The Embedded Runner with Daytona remains a conditional later proof. Revisit it only with an OpenAI-supported automation credential, an exact and tested Pi Worker integration, durable capacity leases, a bounded execution window, and direct Daytona cancellation and verified-deletion support inside the Ornn adapter.
@@ -110,11 +119,7 @@ This is the evidence-backed starting point for the open architecture decisions. 
 
 ## Open evidence tickets
 
-- [#15](https://github.com/bjesuiter/ornn-forge/issues/15) selects and pins the Pi extension for anonymous `web_fetch`.
-- [#16](https://github.com/bjesuiter/ornn-forge/issues/16) benchmarks the OpenCode Go candidates and pins the routing model.
 - [#17](https://github.com/bjesuiter/ornn-forge/issues/17) defines the Analyze Flow audit, provenance, retention, and inspection contract.
-- [#18](https://github.com/bjesuiter/ornn-forge/issues/18) selects local Runner credential storage and the reauthentication protocol.
-- [#19](https://github.com/bjesuiter/ornn-forge/issues/19) defines SandboxDriver errors, cleanup defaults, quarantine, and manual recovery.
 - [#11](https://github.com/bjesuiter/ornn-forge/issues/11) orders the accepted decisions into the first implementation route after the evidence tickets close.
 
 ## Permitted Cloudflare building blocks
@@ -261,3 +266,8 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 - 2026-09-04: Evaluated control-plane portability and telemetry exits in [Control-plane portability and telemetry](./control-plane-portability-and-telemetry.md).
 - 2026-09-04: Tested the lower-level Pi and Daytona packages in the configured Worker runtime and rejected the Embedded Runner as currently specified in [Embedded Runner with Pi and Daytona on Cloudflare](./embedded-runner-pi-daytona-cloudflare.md).
 - 2026-09-04: Chose an Ornn-owned job model that composes focused components behind replaceable contracts in [Select Ornn Forge's assembly level](https://github.com/bjesuiter/ornn-forge/issues/5).
+- 2026-09-05: Selected and verified the pinned Pi anonymous web-fetch extension in [Pi anonymous web-fetch extension](./pi-anonymous-web-fetch.md).
+- 2026-09-05: Benchmarked paid OpenCode Zen finalists and selected Gemini 3.5 Flash Lite in [OpenCode Zen router benchmark](./opencode-go-router-benchmark.md).
+- 2026-09-05: Ran the same routing contract against six Cloudflare Workers AI candidates and retained Nemotron 3 as a tested native fallback without displacing the Zen selection in [Cloudflare Workers AI router benchmark](./cloudflare-workers-ai-router-benchmark.md).
+- 2026-09-05: Selected Runner-local encrypted OAuth storage and the control-plane-relayed device-authorization protocol in [Runner credential storage and reauthentication](./runner-credential-storage-and-reauthentication.md).
+- 2026-09-05: Fixed the stable sandbox failure, cancellation, cleanup, quarantine, and recovery contract in [Analyze Flow sandbox failure and cleanup](./analyze-flow-sandbox-failure-and-cleanup.md).
