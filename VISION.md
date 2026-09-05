@@ -183,6 +183,8 @@ GitHub issue comment with @ornn-forge analyze <prompt>
 
 This is an engineering milestone, not a stage automatically prepended to implementation jobs. A later `implement` invocation performs its analysis, edits, checks, and commit preparation within one job and one sandbox.
 
+The [first Analyze Flow implementation route](docs/plans/first-analyze-flow-implementation-route.md) orders this milestone into eight end-to-end acceptance gates. It proves GitHub admission and D1 inspection first, then routing and clarification, the durable workflow and Remote Runner protocol, Docker, Pi and Runner-local credentials, the real Analysis artifact, interruption recovery, and operation against one production repository.
+
 Only after authorization, idempotency, observability, and cleanup are proven should Ornn add the implementation slice:
 
 ```text

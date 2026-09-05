@@ -30,6 +30,7 @@ The decision sought is a build-ready direction for a production-grade first slic
 - [Select Runner credential storage and reauthentication](https://github.com/bjesuiter/ornn-forge/issues/18): Keep reusable credentials on each Runner, encrypt Pi's mutable OAuth record with a systemd-provided host key, and relay only device-authorization interaction data through the control plane.
 - [Define sandbox failure and cleanup behavior](https://github.com/bjesuiter/ornn-forge/issues/19): Use seven stable error codes plus effect certainty, cancel the whole Job container, and release capacity only after owned resources are verified absent.
 - [Define the Analyze Flow audit and inspection contract](https://github.com/bjesuiter/ornn-forge/issues/17): Keep immutable domain facts and an append-only event stream in D1, expose six authenticated read endpoints to the operator, and limit each Runner to allowlisted writes and related-message reads for its current lease.
+- [Order the build-ready implementation route](https://github.com/bjesuiter/ornn-forge/issues/11): Build the Analyze Flow through eight end-to-end acceptance gates, proving the distributed control-plane and fixture-Runner path before introducing Docker and Pi.
 
 ## Current synthesis
 
@@ -120,9 +121,9 @@ This is the evidence-backed starting point for the open architecture decisions. 
 - The Embedded Runner with Daytona remains a conditional later proof. Revisit it only with an OpenAI-supported automation credential, an exact and tested Pi Worker integration, durable capacity leases, a bounded execution window, and direct Daytona cancellation and verified-deletion support inside the Ornn adapter.
 - Iroh applies to a later Remote Runner transport. Sandbox platforms remain behind the sandbox-driver interface and may use their native connections inside an adapter.
 
-## Open synthesis ticket
+## Implementation handoff
 
-- [Order the build-ready implementation route](https://github.com/bjesuiter/ornn-forge/issues/11) orders the accepted decisions into the first implementation route after the parent decision tickets close.
+- [First Analyze Flow implementation route](../plans/first-analyze-flow-implementation-route.md) is ready for `/to-spec` and `/to-tickets`.
 
 ## Permitted Cloudflare building blocks
 
@@ -273,3 +274,4 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 - 2026-09-05: Ran the same routing contract against six Cloudflare Workers AI candidates and retained Nemotron 3 as a tested native fallback without displacing the Zen selection in [Cloudflare Workers AI router benchmark](./cloudflare-workers-ai-router-benchmark.md).
 - 2026-09-05: Selected Runner-local encrypted OAuth storage and the control-plane-relayed device-authorization protocol in [Runner credential storage and reauthentication](./runner-credential-storage-and-reauthentication.md).
 - 2026-09-05: Fixed the stable sandbox failure, cancellation, cleanup, quarantine, and recovery contract in [Analyze Flow sandbox failure and cleanup](./analyze-flow-sandbox-failure-and-cleanup.md).
+- 2026-09-05: Ordered the accepted architecture into eight end-to-end acceptance gates in [First Analyze Flow implementation route](../plans/first-analyze-flow-implementation-route.md).
