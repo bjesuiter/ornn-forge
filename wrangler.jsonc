@@ -6,6 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "main": "@tanstack/react-start/server-entry",
   "vars": {
+    "GITHUB_APP_INSTALLATION_ID": "159365588",
     "GITHUB_REPOSITORY_ID": "1296836371",
     "GITHUB_REPOSITORY_FULL_NAME": "bjesuiter/ornn-forge"
   },
