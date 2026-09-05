@@ -18,6 +18,7 @@ The decision sought is a build-ready direction for a production-grade first slic
 - [Cloudflare Workers AI router benchmark](./cloudflare-workers-ai-router-benchmark.md)
 - [Runner credential storage and reauthentication](./runner-credential-storage-and-reauthentication.md)
 - [Analyze Flow sandbox failure and cleanup](./analyze-flow-sandbox-failure-and-cleanup.md)
+- [Analyze Flow audit and inspection contract](./analyze-flow-audit-and-inspection-contract.md)
 
 ## Resolved decisions
 
@@ -28,6 +29,7 @@ The decision sought is a build-ready direction for a production-grade first slic
 - [Select the first Pi anonymous web-fetch extension](https://github.com/bjesuiter/ornn-forge/issues/15): Pin `code-yeongyu/pi-webfetch` to commit `ee045140cbaa784eec420bc0a7bc7d7eec0b7043`, accepting its missing private-network and DNS-rebinding defenses for the personal first version.
 - [Select Runner credential storage and reauthentication](https://github.com/bjesuiter/ornn-forge/issues/18): Keep reusable credentials on each Runner, encrypt Pi's mutable OAuth record with a systemd-provided host key, and relay only device-authorization interaction data through the control plane.
 - [Define sandbox failure and cleanup behavior](https://github.com/bjesuiter/ornn-forge/issues/19): Use seven stable error codes plus effect certainty, cancel the whole Job container, and release capacity only after owned resources are verified absent.
+- [Define the Analyze Flow audit and inspection contract](https://github.com/bjesuiter/ornn-forge/issues/17): Keep immutable domain facts and an append-only event stream in D1, expose six authenticated read endpoints to the operator, and limit each Runner to allowlisted writes and related-message reads for its current lease.
 
 ## Current synthesis
 
@@ -42,7 +44,7 @@ This is the evidence-backed starting point for the open architecture decisions. 
 | First sandbox driver | TanStack's Docker provider behind the Ornn adapter | It is self-hosted on `homeserv1` and exposes the filesystem and process operations Pi's tools need |
 | Next execution path | Keep the Embedded Runner with Daytona as a conditional later proof, not an approved production path | A Worker probe runs the lower-level packages, but supported automation credentials, bounded execution, process cancellation, and verified deletion remain unmet gates |
 | Runner transport | Authenticated outbound HTTPS first; Iroh later for NATed personal machines | Iroh does not run directly in the Cloudflare Workers runtime and solves connectivity rather than job ownership |
-| Durable coordination | One recoverable Durable Object per active job | Durable Objects serialize active work, while D1 retains the portable authoritative history |
+| Durable coordination | TanStack Workflow inside the control plane, with D1 as Ornn's authority | The workflow library supplies execution mechanics without owning Job identity, policy, audit history, or completed state |
 | Durable records | D1 with Drizzle and an append-only job event timeline | The SQL schema and data have a practical exit to another SQLite implementation |
 | Artifacts | R2 behind a small Ornn-owned S3-shaped contract | Artifact data and operations can move to a tested self-hosted S3 implementation |
 | Instrumentation | OpenTelemetry, with stable Ornn correlation attributes | It keeps instrumentation independent from storage and inspection tools |
@@ -97,6 +99,7 @@ This is the evidence-backed starting point for the open architecture decisions. 
 - An Analyze Job may change its sandbox checkout, write proof scripts and tests, create local commits, and run prototypes. It cannot publish those repository changes. When it needs an operator decision, it pauses with its Pi session, sandbox, and Runner capacity reservation intact, then resumes after an authorized reply. Idle-resource optimization follows later.
 - An authorized Implement Invocation may consume a prior analysis artifact. Ornn infers it when exactly one eligible plan exists and requires a reference when several could apply. The Implement Job compares the artifact's pinned revision with its own revision and revalidates the plan, safety claims, and blast radius against relevant intervening changes before editing.
 - Analysis artifacts are stored as structured D1 records and rendered as human-readable Ornn messages on GitHub. Their Ornn message IDs let later agents and operator tools locate the durable representation without parsing the comment.
+- D1 stores immutable source, Job, lease, grant, message-revision, and analysis-artifact records plus an append-only versioned event stream. Small mutable summary tables are rebuildable projections. One read-only operator API resolves Invocations, Jobs, streams, Ornn messages, and artifacts. A Runner may append only allowlisted observations and resolve related messages for its authenticated current lease. Sanitized R2 diagnostics expire after 30 days, while D1 keeps their metadata and deletion history until manual purge. See [the audit and inspection contract](./analyze-flow-audit-and-inspection-contract.md).
 - Analyze and Implement Flows grant anonymous web fetch by default. Authenticated web access and specialized CLIs require separate grants.
 - A `blocked` analysis result represents a technical blocker rather than an operator decision. Before returning it, the Job updates one progress message and autonomously attempts every useful cheap investigation while D1 retains the event and message-revision history. Cheap investigations use the existing sandbox, repository, grants, credentials, and configured services. They include web research, codebase research, and disposable local prototypes. New infrastructure, access, credentials, paid resources, or operator setup are not cheap. Flow policy sets hard limits and the agent orders work within them. A soft threshold tells the agent to finish its current investigation and preserve a coherent artifact before the hard limit blocks further capability use. The terminal result records exhausted work and the next investigation that requires such setup, authority, access, or budget. Runtime setup requests may pause and resume the same Job later.
 - The first Implement Flow defaults to Level 3 direct sandbox publication. After the Job enters its publication phase, its sandbox receives a short-lived GitHub App installation token scoped to one repository with `Contents: write` and `Pull requests: write`, never the operator's personal credential or GitHub App administration permission. GitHub does not scope the token to the intended branch, and the first version does not require repository rules to enforce agent policy. One authorized Implement Invocation permits pushes to the job-owned branch and updates to its draft pull request without another approval or a separate numeric count limit; the Job's overall limits still apply. It also authorizes the repository automation normally triggered by those effects. Ornn preserves and records partial publication, then retries the remaining operation idempotently. Level 2 brokered publication and Level 1 isolated change-artifact publication follow as hardening. See [ADR 0006](../adr/0006-start-with-direct-sandbox-github-publication.md).
@@ -117,16 +120,15 @@ This is the evidence-backed starting point for the open architecture decisions. 
 - The Embedded Runner with Daytona remains a conditional later proof. Revisit it only with an OpenAI-supported automation credential, an exact and tested Pi Worker integration, durable capacity leases, a bounded execution window, and direct Daytona cancellation and verified-deletion support inside the Ornn adapter.
 - Iroh applies to a later Remote Runner transport. Sandbox platforms remain behind the sandbox-driver interface and may use their native connections inside an adapter.
 
-## Open evidence tickets
+## Open synthesis ticket
 
-- [#17](https://github.com/bjesuiter/ornn-forge/issues/17) defines the Analyze Flow audit, provenance, retention, and inspection contract.
-- [#11](https://github.com/bjesuiter/ornn-forge/issues/11) orders the accepted decisions into the first implementation route after the evidence tickets close.
+- [Order the build-ready implementation route](https://github.com/bjesuiter/ornn-forge/issues/11) orders the accepted decisions into the first implementation route after the parent decision tickets close.
 
 ## Permitted Cloudflare building blocks
 
-These are permitted starting points, not yet selected or verified conclusions.
+These are permitted starting points. The selected services remain behind Ornn-owned contracts.
 
-- Durable Objects may hold durable job coordination if Celld provides a sufficiently compatible self-hosted exit.
+- TanStack Workflow may supply durable execution mechanics inside the control plane. D1 remains authoritative, and the first route does not add a per-Job Durable Object.
 - D1 may hold relational state if Drizzle keeps the application model portable to another SQLite host or database.
 - R2 may hold artifacts if Ornn uses an S3-compatible storage boundary.
 - Any additional Cloudflare service requires a separate portability review with the user.
