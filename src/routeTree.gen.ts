@@ -10,33 +10,53 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiV1JobsJobIdRouteImport } from './routes/api/v1/jobs/$jobId'
+import { Route as ApiV1GithubWebhookRouteImport } from './routes/api/v1/github/webhook'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1JobsJobIdRoute = ApiV1JobsJobIdRouteImport.update({
+  id: '/api/v1/jobs/$jobId',
+  path: '/api/v1/jobs/$jobId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiV1GithubWebhookRoute = ApiV1GithubWebhookRouteImport.update({
+  id: '/api/v1/github/webhook',
+  path: '/api/v1/github/webhook',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
+  '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
+  '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
+  '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/api/v1/github/webhook' | '/api/v1/jobs/$jobId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/api/v1/github/webhook' | '/api/v1/jobs/$jobId'
+  id: '__root__' | '/' | '/api/v1/github/webhook' | '/api/v1/jobs/$jobId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ApiV1GithubWebhookRoute: typeof ApiV1GithubWebhookRoute
+  ApiV1JobsJobIdRoute: typeof ApiV1JobsJobIdRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +68,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/v1/jobs/$jobId': {
+      id: '/api/v1/jobs/$jobId'
+      path: '/api/v1/jobs/$jobId'
+      fullPath: '/api/v1/jobs/$jobId'
+      preLoaderRoute: typeof ApiV1JobsJobIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/github/webhook': {
+      id: '/api/v1/github/webhook'
+      path: '/api/v1/github/webhook'
+      fullPath: '/api/v1/github/webhook'
+      preLoaderRoute: typeof ApiV1GithubWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ApiV1GithubWebhookRoute: ApiV1GithubWebhookRoute,
+  ApiV1JobsJobIdRoute: ApiV1JobsJobIdRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

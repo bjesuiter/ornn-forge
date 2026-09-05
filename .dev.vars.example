@@ -1,0 +1,7 @@
+# Never commit real values to .dev.vars. Store production values with `wrangler secret put`.
+GITHUB_WEBHOOK_SECRET=
+GITHUB_APP_INSTALLATION_ID=
+GITHUB_REPOSITORY_ID=
+GITHUB_REPOSITORY_FULL_NAME=bjesuiter/ornn-forge
+# A 32-byte raw secret or 43-character base64url encoding of 32 random bytes.
+OPERATOR_BEARER_SECRET=

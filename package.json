@@ -9,24 +9,28 @@
     "typecheck": "tsc --noEmit",
     "env:ops": "DEV_ENV=ops varlock load",
     "deploy": "bun run build && DEV_ENV=ops varlock run -- wrangler deploy",
-    "cf-typegen": "wrangler types"
+    "cf-typegen": "wrangler types",
+    "test": "bun test",
+    "test:smoke:d1": "bun run scripts/smoke-deployed-d1.ts"
   },
   "dependencies": {
-    "@tanstack/react-router": "latest",
-    "@tanstack/react-start": "latest",
-    "react": "latest",
-    "react-dom": "latest"
+    "@tanstack/react-router": "1.170.17",
+    "@tanstack/react-start": "1.168.27",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "latest",
-    "@types/node": "latest",
-    "@types/react": "latest",
-    "@types/react-dom": "latest",
+    "@cloudflare/vite-plugin": "1.44.0",
+    "@cloudflare/workers-types": "5.20260905.1",
+    "bun-types": "1.4.2",
+    "@types/node": "26.1.1",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
     "@varlock/bitwarden-plugin": "^2.0.0",
-    "@vitejs/plugin-react": "latest",
-    "typescript": "latest",
+    "@vitejs/plugin-react": "6.0.3",
+    "typescript": "7.0.2",
     "varlock": "^1.10.0",
-    "vite": "latest",
-    "wrangler": "latest"
+    "vite": "8.1.4",
+    "wrangler": "4.110.0"
   }
 }
