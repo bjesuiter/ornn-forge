@@ -11,12 +11,15 @@ The decision sought is a build-ready direction for a production-grade first slic
 - [Foundation and workflow candidates](./foundation-workflow-candidates.md)
 - [Agent engines and sandbox runners](./agent-engines-and-sandbox-runners.md)
 - [Control-plane portability and telemetry](./control-plane-portability-and-telemetry.md)
+- [Embedded Runner with Pi and Daytona on Cloudflare](./embedded-runner-pi-daytona-cloudflare.md)
+- [GitHub App token scope and branch restrictions](./github-app-token-branch-scope.md)
 
 ## Resolved decisions
 
 - [Select Ornn Forge's assembly level](https://github.com/bjesuiter/ornn-forge/issues/5): Ornn owns the job model and composes focused components behind pinned, tested, application-owned contracts. See [ADR 0001](../adr/0001-ornn-owns-the-job-model.md).
 - [Select the first agent engine and sandbox runner](https://github.com/bjesuiter/ornn-forge/issues/6): Start with a Pi-powered Remote Runner on `homeserv1` and local Docker; prove Codex next, then an Embedded Runner with Daytona's managed API.
-- [Decide whether a temporary bridge earns its removal cost](https://github.com/bjesuiter/ornn-forge/issues/10): Do not adopt a temporary full-solution bridge. Retain `gh-aw`'s separation of read-only inference from privileged publication as an Ornn-owned security boundary.
+- [Validate an Embedded Runner with Pi and Daytona on Cloudflare](https://github.com/bjesuiter/ornn-forge/issues/14): Do not approve the Embedded Runner as specified. The lower-level Pi core and Daytona provider run in a Worker probe, but personal ChatGPT subscription automation, Pi's Worker OAuth path, bounded background duration, and Daytona cancellation and verified deletion do not meet the production contract.
+- [Decide whether a temporary bridge earns its removal cost](https://github.com/bjesuiter/ornn-forge/issues/10): Do not adopt a temporary full-solution bridge. Keep publication as an explicitly authorized Ornn effect; ADR 0006 later chose a direct initial provider that does not isolate the GitHub credential from the sandbox.
 
 ## Current synthesis
 
@@ -24,12 +27,12 @@ This is the evidence-backed starting point for the open architecture decisions. 
 
 | Area | Current direction | Main reason |
 | --- | --- | --- |
-| Overall assembly | Decided: Ornn-owned Cloudflare control plane and capability contracts | Full solutions own a competing job or workflow model |
+| Overall assembly | Decided: Ornn-owned Cloudflare control plane and application contracts | Full solutions own a competing job or workflow model |
 | First Runner | Decided: Remote Runner on `homeserv1` with bounded Runner capacity | It provides an independently operated path and can host one Pi session and one sandbox per job |
-| First agent engine | Decided: Pi; Codex follows as the first real replacement | Pi keeps subscription credentials in the trusted Runner while routing tools into the sandbox |
+| First agent engine | Decided: Pi; Codex follows as the first real replacement | Pi keeps a separately authorized subscription credential in each trusted Runner while routing tools into the sandbox; the control plane relays only reauthentication instructions and status |
 | Sandbox-driver module | Ornn owns a small interface; one pinned TanStack adapter reuses bundled or custom providers internally | TanStack saves provider integration work without defining Ornn's security, cleanup, identity, or error semantics |
 | First sandbox driver | TanStack's Docker provider behind the Ornn adapter | It is self-hosted on `homeserv1` and exposes the filesystem and process operations Pi's tools need |
-| Next execution path | Embedded Runner in Cloudflare with TanStack's Daytona provider, pending feasibility research | It proves both Embedded Runner execution and a managed remote sandbox without making Daytona authoritative |
+| Next execution path | Keep the Embedded Runner with Daytona as a conditional later proof, not an approved production path | A Worker probe runs the lower-level packages, but supported automation credentials, bounded execution, process cancellation, and verified deletion remain unmet gates |
 | Runner transport | Authenticated outbound HTTPS first; Iroh later for NATed personal machines | Iroh does not run directly in the Cloudflare Workers runtime and solves connectivity rather than job ownership |
 | Durable coordination | One recoverable Durable Object per active job | Durable Objects serialize active work, while D1 retains the portable authoritative history |
 | Durable records | D1 with Drizzle and an append-only job event timeline | The SQL schema and data have a practical exit to another SQLite implementation |
@@ -46,7 +49,7 @@ This is the evidence-backed starting point for the open architecture decisions. 
 
 - Ornn must not depend on an application component or managed service without a credible exit to an independently operable replacement.
 - Ornn must own the overall system shape, including its GitHub contract, job model, deployment, Runner protocol, and sandbox-driver interface.
-- Ornn must be assembled from a small set of independently testable, observable capabilities. Higher-order workflows should compose those capabilities rather than hide them inside one framework-controlled operation.
+- Ornn must expose independently testable and observable application contracts. Its orchestration must remain visible rather than hiding the job lifecycle inside one framework-controlled operation.
 - The system must support Embedded and Remote Runners, with the Remote Runner integrated first.
 - Docker, Daytona, and future sandbox platforms must fit behind the same Ornn-owned sandbox-driver interface.
 - The agent engine must be replaceable independently from the Runner, sandbox driver, and model provider.
@@ -58,7 +61,7 @@ This is the evidence-backed starting point for the open architecture decisions. 
 ### Preferences
 
 - Prefer assembling focused components over adopting an opinionated full product.
-- Prefer candidates that expose one useful capability behind a narrow interface over candidates that require adopting their complete workflow model.
+- Prefer candidates that expose useful mechanics behind a narrow interface over candidates that require adopting their complete workflow model.
 - Prefer stable dependencies and explicit boundaries over fast-moving frameworks that control the architecture.
 - Reach the first real repository flow in days rather than weeks.
 - A full solution may be acceptable as a temporary bridge if Ornn can replace it without migrating its core concepts or user-facing contract.
@@ -72,15 +75,47 @@ This is the evidence-backed starting point for the open architecture decisions. 
 - The only initially authorized GitHub actor is `bjesuiter`.
 - The GitHub App may operate on every repository to which it is installed. Repository ownership does not grant invocation authority to other users.
 - The initial agent engine is Pi using the user's OpenAI subscription. Codex is the first real replacement proof, and the available OpenAI model variant should be selectable at runtime.
+- The control plane hosts the Runner reauthentication experience but never receives a reusable OpenAI credential. Each Runner independently starts device authorization, exposes only the verification URL, one-time code, expiry, and status through the control plane, and stores and refreshes its own credential. Credentials are not copied between Runners.
+- The web research capability will reuse pinned Runner-hosted agent tools and, later, a reviewed Pi MCP adapter rather than an Ornn-built search implementation. Only operator-approved Runner configuration may expose MCP servers; repository-provided MCP configuration is ignored.
+- The first web research implementation exposes only anonymous `web_fetch` through a pinned and reviewed Pi extension. It must pass contract tests for private-address blocking, DNS rebinding, redirects, response limits, timeouts, and cancellation. Exa search and MCP integration follow later.
+- An authorized invocation is routed to a registered flow by a model, not by fixed command keywords. The router receives the flow catalog, issue title and body, invoking comment, and authorized clarification replies. It must return either a selected registered flow with requested overrides or a concrete clarification question; numeric confidence does not authorize execution.
+- The first control-plane flow router uses TanStack AI with OpenCode Go behind an Ornn-owned provider interface. The Go API key stays in a Worker secret, Zen balance fallback remains disabled, and production use requires confirmation that unattended internal routing complies with OpenCode's hosted-service terms. A contract benchmark will compare `glm-5.3-flash`, `mimo-v2.5`, and `deepseek-v4-flash` before pinning the initial model. See [the routing-provider research](./opencode-zen-go-tanstack-ai-routing.md).
+- A clarification question includes a visible short invocation reference. A reply from the authorized invoker resumes the sole pending interaction without another mention or explicit reference. When several interactions are pending on one issue, the reply must include the reference. A later dashboard should host these interactions when comment traffic becomes unwieldy.
+- Every GitHub comment published by Ornn is an Ornn message with a compact self-link whose visible text is its opaque Ornn message ID, such as `om_01K...`. D1 maps the ID to structured message content and related Invocations, Jobs, interactions, and artifacts. Workflow state may reference the ID, but D1 remains authoritative. The public ID grants no authority. An authorized Invocation may use it as an anchor for resolving related objects. The control plane queries deterministic candidates before model interpretation and asks when the relation remains ambiguous. In the first slice, only the control plane acting for an authenticated operator Invocation or UI session, and a Runner within its current Job lease, may resolve the structured record.
+- A Job starts only after Flow routing succeeds and allowed overrides are resolved. Routing clarification does not consume Runner capacity or create an agent session or sandbox.
+- Flows are trusted TypeScript modules. They provide default agent configuration, capability grants, providers, artifact handling, and publication policy so the operator configures only deployment-specific or exceptional values. TanStack Workflow is the preferred implementation for durable flow execution behind Ornn-owned job and policy contracts.
+- Analyze and Implement are separate registered Flows. The first Analyze Flow evaluates how prepared an issue is for implementation, isolates decisions only the operator can make, and finds or generates viable implementation strategies. It may choose the recommended strategy when repository evidence makes the choice clear. Its artifact contains focused operator questions, an implementation plan, or a technical blocker after permitted cheap investigations are exhausted.
+- Blast-radius analysis will compare every viable strategy, then use a pinned, operator-reviewed copy of pstack's MIT-licensed `blast-radius` skill in full for the recommended strategy, initially pinned to `e46364b8be46000b7df0f260550cd712afbb8d36`. It must look past direct callers, state the facts the strategy's safety depends on, prove cheap facts against the real code, and mark the rest unproven. If the operator selects another strategy, Ornn runs the full check for it on demand.
+- An Analyze Job may change its sandbox checkout, write proof scripts and tests, create local commits, and run prototypes. It cannot publish those repository changes. When it needs an operator decision, it pauses with its Pi session, sandbox, and Runner capacity reservation intact, then resumes after an authorized reply. Idle-resource optimization follows later.
+- An authorized Implement Invocation may consume a prior analysis artifact. Ornn infers it when exactly one eligible plan exists and requires a reference when several could apply. The Implement Job compares the artifact's pinned revision with its own revision and revalidates the plan, safety claims, and blast radius against relevant intervening changes before editing.
+- Analysis artifacts are stored as structured D1 records and rendered as human-readable Ornn messages on GitHub. Their Ornn message IDs let later agents and operator tools locate the durable representation without parsing the comment.
+- Analyze and Implement Flows grant anonymous web fetch by default. Authenticated web access and specialized CLIs require separate grants.
+- A `blocked` analysis result represents a technical blocker rather than an operator decision. Before returning it, the Job updates one progress message and autonomously attempts every useful cheap investigation while D1 retains the event and message-revision history. Cheap investigations use the existing sandbox, repository, grants, credentials, and configured services. They include web research, codebase research, and disposable local prototypes. New infrastructure, access, credentials, paid resources, or operator setup are not cheap. Flow policy sets hard limits and the agent orders work within them. A soft threshold tells the agent to finish its current investigation and preserve a coherent artifact before the hard limit blocks further capability use. The terminal result records exhausted work and the next investigation that requires such setup, authority, access, or budget. Runtime setup requests may pause and resume the same Job later.
+- The first Implement Flow defaults to Level 3 direct sandbox publication. After the Job enters its publication phase, its sandbox receives a short-lived GitHub App installation token scoped to one repository with `Contents: write` and `Pull requests: write`, never the operator's personal credential or GitHub App administration permission. GitHub does not scope the token to the intended branch, and the first version does not require repository rules to enforce agent policy. One authorized Implement Invocation permits pushes to the job-owned branch and updates to its draft pull request without another approval or a separate numeric count limit; the Job's overall limits still apply. It also authorizes the repository automation normally triggered by those effects. Ornn preserves and records partial publication, then retries the remaining operation idempotently. Level 2 brokered publication and Level 1 isolated change-artifact publication follow as hardening. See [ADR 0006](../adr/0006-start-with-direct-sandbox-github-publication.md).
+- D1 stores authoritative per-Job duration, limit interruption, model and tool usage, provider quota, and billed-cost records when available. Derived OpenTelemetry metrics support inspection. Those measurements guide later changes to versioned Flow limits and provider budgets.
+- A flow defines the default and maximum capability grants for its jobs. The authorized invoker may request an override in the invocation prompt or a later clarification reply within operator policy. Issue text, other users' comments, and repository files cannot authorize overrides. Runtime capability requests with explicit human approval may follow later.
+- Capability identity does not prescribe execution location. A flow selects a logical default provider; deployment configuration binds it to a concrete service, credential, and location. A trusted provider may execute on the Runner, route work into the sandbox, or use a separate publisher.
+- Each job pins its resolved flow version and configuration. An authorized invoker may restart the work on a newer flow version, creating a new linked job rather than mutating the original job.
 - Ornn will have an operator-controlled default agent profile. The authorized invoker may select another allowlisted profile per invocation. Each job records the resolved engine, model, and context configuration rather than depending only on a mutable profile name.
 - Anthropic models are expected later for adversarial code review; that review is not yet part of the first slice.
-- The control plane is one modular deployment managed by one operator. Capabilities are internal code boundaries, not microservices.
+- The control plane is one modular deployment managed by one operator. Internal code boundaries are not separately deployed microservices.
 - Research may add alternatives when they fill a missing capability or provide a clearly stronger self-hostable comparison.
 - The first implementation should arrive in days rather than weeks, but speed does not outrank control, security, or stability.
 - Production-grade means reliable operation by one operator. It requires a secure authenticated entrance, strict invocation authorization, inspectable job state, and a minimal useful telemetry set. Cloudflare supplies availability for its underlying services, so Ornn does not need its own high-availability system in the first slice.
 - The first path uses a Remote Runner on `homeserv1`, one Pi session and one Docker sandbox per job, configurable Runner capacity, and authenticated outbound HTTPS polling.
-- The next path is an Embedded Runner in Cloudflare using Daytona's maintained managed service. Its runtime and authentication feasibility remains under research.
+- The first slice uses exactly one Pi session per Job. Agent-level parallel and dependent work can be added later without changing the Job boundary.
+- Every sandbox provides its standard execution environment, toolchain, and pinned repository workspace as prerequisites. Ornn does not model those basics as Capability grants; grants govern extra agent abilities and external effects.
+- The Embedded Runner with Daytona remains a conditional later proof. Revisit it only with an OpenAI-supported automation credential, an exact and tested Pi Worker integration, durable capacity leases, a bounded execution window, and direct Daytona cancellation and verified-deletion support inside the Ornn adapter.
 - Iroh applies to a later Remote Runner transport. Sandbox platforms remain behind the sandbox-driver interface and may use their native connections inside an adapter.
+
+## Open evidence tickets
+
+- [#15](https://github.com/bjesuiter/ornn-forge/issues/15) selects and pins the Pi extension for anonymous `web_fetch`.
+- [#16](https://github.com/bjesuiter/ornn-forge/issues/16) benchmarks the OpenCode Go candidates and pins the routing model.
+- [#17](https://github.com/bjesuiter/ornn-forge/issues/17) defines the Analyze Flow audit, provenance, retention, and inspection contract.
+- [#18](https://github.com/bjesuiter/ornn-forge/issues/18) selects local Runner credential storage and the reauthentication protocol.
+- [#19](https://github.com/bjesuiter/ornn-forge/issues/19) defines SandboxDriver errors, cleanup defaults, quarantine, and manual recovery.
+- [#11](https://github.com/bjesuiter/ornn-forge/issues/11) orders the accepted decisions into the first implementation route after the evidence tickets close.
 
 ## Permitted Cloudflare building blocks
 
@@ -187,7 +222,7 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 
 #### Daytona
 
-- Evaluation status: complete; use the maintained managed API as the next sandbox-driver proof, but not as the self-hosting foundation because the last public self-hosted release is frozen.
+- Evaluation status: complete; retain the maintained managed API as a conditional sandbox-driver proof, not an approved Embedded Runner path or self-hosting foundation. The current TanStack provider cannot kill spawned commands and hides deletion failures, so an Ornn adapter would need direct Daytona SDK or REST operations for cancellation and verified cleanup.
 
 #### NVIDIA OpenShell
 
@@ -208,8 +243,8 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 ## Open comparison questions
 
 - Which responsibilities must Ornn own to preserve a cheap exit from every dependency?
-- What is the smallest useful set of Ornn capabilities from which analysis and implementation jobs can be composed?
-- What contract makes each capability independently testable without forcing all capabilities into one process or deployment?
+- Which authorized abilities should Ornn grant to agents in analysis and implementation jobs?
+- How does Ornn authorize, provide, restrict, and audit each job-scoped capability grant independently of the tool that implements its capability?
 - Can a temporary full solution be isolated behind the same contracts intended for the long-term system?
 - What isolation mechanism should a user-owned machine provide for untrusted repository work?
 - What protocol should connect Remote Runners, including user-owned machines, to the control plane?
@@ -224,4 +259,5 @@ No candidate below has been evaluated yet. Notes marked as user context record t
 - 2026-09-04: Evaluated turnkey and workflow-level candidates in [Foundation and workflow candidates](./foundation-workflow-candidates.md).
 - 2026-09-04: Evaluated agent engines, Runners, sandbox drivers, and transports in [Agent engines and sandbox runners](./agent-engines-and-sandbox-runners.md).
 - 2026-09-04: Evaluated control-plane portability and telemetry exits in [Control-plane portability and telemetry](./control-plane-portability-and-telemetry.md).
+- 2026-09-04: Tested the lower-level Pi and Daytona packages in the configured Worker runtime and rejected the Embedded Runner as currently specified in [Embedded Runner with Pi and Daytona on Cloudflare](./embedded-runner-pi-daytona-cloudflare.md).
 - 2026-09-04: Chose an Ornn-owned job model that composes focused components behind replaceable contracts in [Select Ornn Forge's assembly level](https://github.com/bjesuiter/ornn-forge/issues/5).
