@@ -92,10 +92,17 @@ export function Dashboard({
                 <li key={runner.id} className="fd-runner-row">
                   <div>
                     <h2>{runner.id}</h2>
-                    <p className={`fd-runner-presence ${runner.paused ? 'is-paused' : runner.online ? 'is-online' : 'is-offline'}`}>
-                      <span aria-hidden="true" />
-                      {runner.paused ? 'Pausiert' : runner.online ? 'Online' : 'Offline'}
-                    </p>
+                    <div className="fd-runner-state">
+                      <p className={`fd-runner-presence ${runner.online ? 'is-online' : 'is-offline'}`}>
+                        <span aria-hidden="true" />
+                        {runner.online ? 'Online' : 'Offline'}
+                      </p>
+                      {runner.paused && (
+                        <span className="fd-runner-pause">
+                          Pausiert
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="fd-runner-work">
                     <span>Aktuelle Arbeit</span>
