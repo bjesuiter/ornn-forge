@@ -180,6 +180,36 @@ test('reconciles a reconnecting Runner against durable desired configuration', a
   expect(synchronized).toMatchObject({ desiredConfiguration: { paused: true, capacity: 2 }, activeLeases: [], pendingCommands: [] })
 })
 
+test('routes an authenticated WebSocket upgrade to the identity-selected Runner connection without forwarding the credential', async () => {
+  let selectedRunner: string | undefined
+  let authorization: string | null | undefined
+  const app = createControlPlane({
+    store: createInMemoryInvocationStore(), githubWebhookSecret: webhookSecret, githubInstallationId: '42', githubRepositoryId: '99',
+    operatorBearerSecret: operatorSecret, runnerCredentialId: 'runner_homeserv1', runnerCredentialSecret: 'r'.repeat(32),
+    runnerConnection: { async connect(runnerId, request) { selectedRunner = runnerId; authorization = request.headers.get('authorization'); return new Response('connected') } },
+  })
+  const response = await app.fetch(new Request('https://ornn.example/api/v1/runner/connect', {
+    headers: { upgrade: 'websocket', authorization: `Bearer ${'r'.repeat(32)}`, 'x-ornn-runner-id': 'runner_homeserv1' },
+  }))
+  expect(response.status).toBe(200)
+  expect(selectedRunner).toBe('runner_homeserv1')
+  expect(authorization).toBeNull()
+})
+
+test('does not expose legacy Runner polling when the Worker uses enrolled Runner credentials', async () => {
+  const app = createControlPlane({
+    store: createInMemoryInvocationStore(), githubWebhookSecret: webhookSecret, githubInstallationId: '42', githubRepositoryId: '99',
+    operatorBearerSecret: operatorSecret,
+  })
+
+  const response = await app.fetch(new Request('https://ornn.example/api/v1/runner/poll', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${'r'.repeat(32)}`, 'x-ornn-runner-id': 'runner_homeserv1' },
+  }))
+
+  expect(response.status).toBe(404)
+})
+
 test('leases one pending Job to its authenticated Runner and records its fixture Analysis artifact', async () => {
   const calls: string[] = []
   const app = createControlPlane({

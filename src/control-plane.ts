@@ -6,6 +6,7 @@ import {
   parseRunnerEnvelope,
   type AnalysisArtifact,
   type LeaseGrant,
+  type RunnerCommandJournalEntry,
   type RunnerFault,
   type RunnerSynchronization,
   type RunnerDesiredConfiguration,
@@ -32,6 +33,7 @@ export type ControlPlaneOptions = {
   operatorBearerSecret: string
   runnerCredentialId?: string
   runnerCredentialSecret?: string
+  runnerConnection?: { connect(runnerId: string, request: Request): Promise<Response> }
   messagePublisher?: OrnnMessagePublisher
   now?: () => Date
 }
@@ -110,6 +112,7 @@ export interface InvocationStore {
   recordRunnerHeartbeat?(runnerId: string): Promise<void>
   updateRunnerProfile?(runnerId: string, profile: RunnerProfile): Promise<void>
   synchronizeRunner?(input: RunnerSynchronization): Promise<RunnerSynchronizationResult | undefined>
+  acknowledgeRunnerCommand?(runnerId: string, entry: RunnerCommandJournalEntry): Promise<boolean>
   pollRunner?(runnerId: string): Promise<LeaseGrant | undefined>
   setRunnerPaused?(runnerId: string, paused: boolean): Promise<boolean>
   heartbeatLease?(input: LeaseInput): Promise<boolean>
@@ -216,8 +219,12 @@ export function createControlPlane(options: ControlPlaneOptions) {
           : json({ apiVersion: API_VERSION, error: { code: 'setup_token_invalid' } }, 401)
       }
 
+      if (request.method === 'GET' && url.pathname === '/api/v1/runner/connect') {
+        return handleRunnerConnection(request, options, runnerCredential)
+      }
+
       const runnerMatch = /^\/api\/v1\/runner\/(poll|heartbeat|result|report)$/.exec(url.pathname)
-      if (request.method === 'POST' && runnerMatch) {
+      if (request.method === 'POST' && runnerMatch && options.runnerCredentialId) {
         return handleRunnerRequest(request, runnerMatch[1] as 'poll' | 'heartbeat' | 'result' | 'report', options, runnerCredential)
       }
 
@@ -252,6 +259,26 @@ export function createControlPlane(options: ControlPlaneOptions) {
       return json({ apiVersion: API_VERSION, error: { code: 'route_not_found' } }, 404)
     },
   }
+}
+
+async function handleRunnerConnection(request: Request, options: ControlPlaneOptions, expectedCredential: Uint8Array | undefined): Promise<Response> {
+  if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
+    return json({ apiVersion: API_VERSION, error: { code: 'websocket_upgrade_required' } }, 426)
+  }
+  const runnerId = await authenticatedRunnerId(request, options, expectedCredential)
+  if (!runnerId || !options.runnerConnection) return json({ apiVersion: API_VERSION, error: { code: 'runner_unauthorized' } }, 401)
+  const headers = new Headers(request.headers)
+  headers.delete('authorization')
+  return options.runnerConnection.connect(runnerId, new Request(request, { headers }))
+}
+
+async function authenticatedRunnerId(request: Request, options: ControlPlaneOptions, expectedCredential: Uint8Array | undefined): Promise<string | undefined> {
+  const runnerId = request.headers.get('x-ornn-runner-id')
+  const authorization = request.headers.get('authorization')
+  const providedCredential = authorization?.startsWith('Bearer ') ? runnerCredentialBytes(authorization.slice('Bearer '.length)) : undefined
+  if (!runnerId || !providedCredential || !options.store.authenticateRunner) return undefined
+  if (expectedCredential && (!options.runnerCredentialId || runnerId !== options.runnerCredentialId || !constantTimeEqual(await digest(providedCredential), await digest(expectedCredential)))) return undefined
+  return (await options.store.authenticateRunner(runnerId, await sha256Bytes(providedCredential))) ? runnerId : undefined
 }
 
 async function handleRunnerRequest(
@@ -416,13 +443,17 @@ async function admitGitHubDelivery(
 }
 
 async function publishMessage(options: ControlPlaneOptions, jobId: string): Promise<void> {
-  if (!options.messagePublisher || !options.store.recordMessagePublication) return
-  const inspection = await options.store.inspectJob(jobId)
+  await publishJobMessage(options.store, options.messagePublisher, jobId)
+}
+
+export async function publishJobMessage(store: InvocationStore, messagePublisher: OrnnMessagePublisher | undefined, jobId: string): Promise<void> {
+  if (!messagePublisher || !store.recordMessagePublication) return
+  const inspection = await store.inspectJob(jobId)
   if (!inspection?.message) return
   const { message } = inspection
   try {
     const body = renderMessage(inspection)
-    const reconciled = await options.messagePublisher.reconcile({
+    const reconciled = await messagePublisher.reconcile({
       repository: inspection.invocation.github.repository.fullName,
       issueNumber: inspection.invocation.github.issue.number,
       effectKey: message.effectKey,
@@ -430,23 +461,23 @@ async function publishMessage(options: ControlPlaneOptions, jobId: string): Prom
       body,
     })
     if (reconciled) {
-      await options.store.recordMessagePublication(jobId, { githubCommentId: reconciled.githubCommentId, attempt: 'succeeded' })
+      await store.recordMessagePublication(jobId, { githubCommentId: reconciled.githubCommentId, attempt: 'succeeded' })
       return
     }
     if (message.githubCommentId) {
-      await options.messagePublisher.update({ repository: inspection.invocation.github.repository.fullName, githubCommentId: message.githubCommentId, effectKey: message.effectKey, body })
-      await options.store.recordMessagePublication(jobId, { githubCommentId: message.githubCommentId, attempt: 'succeeded' })
+      await messagePublisher.update({ repository: inspection.invocation.github.repository.fullName, githubCommentId: message.githubCommentId, effectKey: message.effectKey, body })
+      await store.recordMessagePublication(jobId, { githubCommentId: message.githubCommentId, attempt: 'succeeded' })
       return
     }
-    const created = await options.messagePublisher.create({
+    const created = await messagePublisher.create({
       repository: inspection.invocation.github.repository.fullName,
       issueNumber: inspection.invocation.github.issue.number,
       effectKey: message.effectKey,
       body,
     })
-    await options.store.recordMessagePublication(jobId, { githubCommentId: created.githubCommentId, attempt: 'succeeded' })
+    await store.recordMessagePublication(jobId, { githubCommentId: created.githubCommentId, attempt: 'succeeded' })
   } catch {
-    await options.store.recordMessagePublication(jobId, { githubCommentId: message.githubCommentId, attempt: 'uncertain' })
+    await store.recordMessagePublication(jobId, { githubCommentId: message.githubCommentId, attempt: 'uncertain' })
   }
 }
 
@@ -806,6 +837,9 @@ export function createInMemoryInvocationStore(): InvocationStore {
         activeLeases,
         pendingCommands: [],
       }
+    },
+    async acknowledgeRunnerCommand(runnerId) {
+      return runnerCredentials.has(runnerId)
     },
     async pollRunner(runnerId) {
       if (pausedRunners.has(runnerId)) return undefined
@@ -1256,6 +1290,19 @@ class D1InvocationStore implements InvocationStore {
         } catch { return [] }
       }),
     }
+  }
+
+  async acknowledgeRunnerCommand(runnerId: string, entry: RunnerCommandJournalEntry): Promise<boolean> {
+    const result = await this.database.prepare(`INSERT INTO runner_command_journal (
+      runner_id, command_id, state, reported_at
+    ) SELECT ?, command_id, ?, ? FROM runner_commands WHERE runner_id = ? AND command_id = ?
+    ON CONFLICT(runner_id, command_id) DO UPDATE SET state = CASE
+      WHEN runner_command_journal.state IN ('completed', 'failed') THEN runner_command_journal.state
+      ELSE excluded.state END,
+    reported_at = CASE WHEN runner_command_journal.state IN ('completed', 'failed') THEN runner_command_journal.reported_at ELSE excluded.reported_at END`).bind(
+      runnerId, entry.state, new Date().toISOString(), runnerId, entry.commandId,
+    ).run()
+    return result.meta.changes === 1
   }
 
   async pollRunner(runnerId: string): Promise<LeaseGrant | undefined> {

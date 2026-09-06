@@ -15,6 +15,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
 import { Route as DashboardExamplesRouteImport } from './routes/dashboard.examples'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
+import { Route as ApiV1RunnerConnectRouteImport } from './routes/api/v1/runner/connect'
 import { Route as ApiV1RunnerOperationRouteImport } from './routes/api/v1/runner/$operation'
 import { Route as ApiV1MessagesOrnnMessageIdRouteImport } from './routes/api/v1/messages/$ornnMessageId'
 import { Route as ApiV1JobsJobIdRouteImport } from './routes/api/v1/jobs/$jobId'
@@ -50,6 +51,11 @@ const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1RunnerConnectRoute = ApiV1RunnerConnectRouteImport.update({
+  id: '/api/v1/runner/connect',
+  path: '/api/v1/runner/connect',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiV1RunnerOperationRoute = ApiV1RunnerOperationRouteImport.update({
   id: '/api/v1/runner/$operation',
   path: '/api/v1/runner/$operation',
@@ -83,6 +89,7 @@ export interface FileRoutesByFullPath {
   '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
   '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
   '/api/v1/runner/$operation': typeof ApiV1RunnerOperationRoute
+  '/api/v1/runner/connect': typeof ApiV1RunnerConnectRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -94,6 +101,7 @@ export interface FileRoutesByTo {
   '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
   '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
   '/api/v1/runner/$operation': typeof ApiV1RunnerOperationRoute
+  '/api/v1/runner/connect': typeof ApiV1RunnerConnectRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -107,6 +115,7 @@ export interface FileRoutesById {
   '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
   '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
   '/api/v1/runner/$operation': typeof ApiV1RunnerOperationRoute
+  '/api/v1/runner/connect': typeof ApiV1RunnerConnectRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -121,6 +130,7 @@ export interface FileRouteTypes {
     | '/api/v1/jobs/$jobId'
     | '/api/v1/messages/$ornnMessageId'
     | '/api/v1/runner/$operation'
+    | '/api/v1/runner/connect'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -132,6 +142,7 @@ export interface FileRouteTypes {
     | '/api/v1/jobs/$jobId'
     | '/api/v1/messages/$ornnMessageId'
     | '/api/v1/runner/$operation'
+    | '/api/v1/runner/connect'
   id:
     | '__root__'
     | '/'
@@ -144,6 +155,7 @@ export interface FileRouteTypes {
     | '/api/v1/jobs/$jobId'
     | '/api/v1/messages/$ornnMessageId'
     | '/api/v1/runner/$operation'
+    | '/api/v1/runner/connect'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -155,6 +167,7 @@ export interface RootRouteChildren {
   ApiV1JobsJobIdRoute: typeof ApiV1JobsJobIdRoute
   ApiV1MessagesOrnnMessageIdRoute: typeof ApiV1MessagesOrnnMessageIdRoute
   ApiV1RunnerOperationRoute: typeof ApiV1RunnerOperationRoute
+  ApiV1RunnerConnectRoute: typeof ApiV1RunnerConnectRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -199,6 +212,13 @@ declare module '@tanstack/react-router' {
       path: '/api/auth/$'
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/v1/runner/connect': {
+      id: '/api/v1/runner/connect'
+      path: '/api/v1/runner/connect'
+      fullPath: '/api/v1/runner/connect'
+      preLoaderRoute: typeof ApiV1RunnerConnectRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/v1/runner/$operation': {
@@ -255,6 +275,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiV1JobsJobIdRoute: ApiV1JobsJobIdRoute,
   ApiV1MessagesOrnnMessageIdRoute: ApiV1MessagesOrnnMessageIdRoute,
   ApiV1RunnerOperationRoute: ApiV1RunnerOperationRoute,
+  ApiV1RunnerConnectRoute: ApiV1RunnerConnectRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -21,6 +21,8 @@
       "migrations_dir": "migrations"
     }
   ],
+  "durable_objects": { "bindings": [{ "name": "RUNNER_CONNECTION", "class_name": "RunnerConnection" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RunnerConnection"] }],
   "observability": {
     "enabled": true
   },

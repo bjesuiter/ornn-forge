@@ -43,6 +43,14 @@ export type RunnerResult = RunnerEnvelope<'lease.result', {
   artifact: AnalysisArtifact
 }>
 export type RunnerReport = RunnerEnvelope<'runner.report', { runnerId: string; fault: RunnerFault }>
+export type RunnerSynchronize = RunnerEnvelope<'runner.synchronize', RunnerSynchronization>
+export type RunnerPresenceHeartbeat = RunnerEnvelope<'runner.heartbeat', { runnerId: string; instanceId: string }>
+export type RunnerLeaseAccept = RunnerEnvelope<'lease.accept', RunnerLeaseClaim & { runnerId: string }>
+export type RunnerCommandAcknowledgement = RunnerEnvelope<'runner.command.acknowledged', {
+  runnerId: string
+  commandId: string
+  state: RunnerCommandJournalEntry['state']
+}>
 
 export type AnalysisArtifact = {
   schemaVersion: 1
@@ -67,6 +75,15 @@ export type RunnerResponse =
   | RunnerEnvelope<'runner.accepted', Record<string, never>>
   | RunnerEnvelope<'lease.rejected', { code: 'lease_invalid' | 'lease_expired' | 'runner_unauthorized' | 'invalid_artifact' }>
   | RunnerEnvelope<'protocol.unsupported', { supportedMajor: typeof RUNNER_PROTOCOL_MAJOR }>
+
+export type RunnerControlResponse =
+  | RunnerEnvelope<'runner.synchronized', {
+    desiredConfiguration: RunnerDesiredConfiguration
+    activeLeases: Array<{ jobId: string; accepted: boolean }>
+    pendingCommands: Array<{ commandId: string; type: string; payload: Record<string, unknown> }>
+  }>
+  | RunnerEnvelope<'runner.heartbeat.accepted', Record<string, never>>
+  | RunnerResponse
 
 export function envelope<TType extends string, TPayload>(type: TType, payload: TPayload): RunnerEnvelope<TType, TPayload> {
   return { protocol: { major: RUNNER_PROTOCOL_MAJOR }, type, payload }
@@ -107,13 +124,17 @@ export function isRunnerFault(value: unknown): value is RunnerFault {
   return isRecord(value) && isShortText(value.code)
 }
 
+export function isRunnerCommandJournalEntry(value: unknown): value is RunnerCommandJournalEntry {
+  return isRecord(value) && isShortText(value.commandId)
+    && (value.state === 'accepted' || value.state === 'completed' || value.state === 'failed')
+}
+
 export function isRunnerSynchronization(value: unknown): value is RunnerSynchronization {
   if (!isRecord(value) || !isRunnerProfile(value.profile) || !isOpaqueId(value.runnerId, 'runner') || !isOpaqueId(value.instanceId, 'instance')) return false
   return Array.isArray(value.activeLeases) && value.activeLeases.length <= 32
     && value.activeLeases.every((lease) => isRecord(lease) && isShortText(lease.jobId) && isShortText(lease.leaseToken))
     && Array.isArray(value.commandJournal) && value.commandJournal.length <= 256
-    && value.commandJournal.every((entry) => isRecord(entry) && isShortText(entry.commandId)
-      && (entry.state === 'accepted' || entry.state === 'completed' || entry.state === 'failed'))
+    && value.commandJournal.every(isRunnerCommandJournalEntry)
 }
 
 function isShortText(value: unknown): value is string {

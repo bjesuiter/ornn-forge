@@ -9,8 +9,7 @@ export function createCloudflareControlPlane(env: Cloudflare.Env) {
     githubRepositoryId: env.GITHUB_REPOSITORY_ID,
     githubRepositoryFullName: env.GITHUB_REPOSITORY_FULL_NAME,
     operatorBearerSecret: env.OPERATOR_BEARER_SECRET,
-    runnerCredentialId: env.ORNN_RUNNER_CREDENTIAL_ID,
-    runnerCredentialSecret: env.ORNN_RUNNER_CREDENTIAL_SECRET,
+    runnerConnection: { connect: (runnerId, request) => env.RUNNER_CONNECTION.getByName(runnerId).fetch(request) },
     messagePublisher: createGitHubMessagePublisher({
       appId: env.GITHUB_APP_ID,
       privateKey: env.GITHUB_APP_PRIVATE_KEY,

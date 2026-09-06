@@ -1,6 +1,8 @@
 import handler from '@tanstack/react-start/server-entry'
 import { cleanupRejectedDashboardLogins } from './dashboard-access'
 
+export { RunnerConnection } from './runner-connection'
+
 export default {
   fetch: handler.fetch,
   async scheduled(_controller: ScheduledController, environment: Cloudflare.Env) {
