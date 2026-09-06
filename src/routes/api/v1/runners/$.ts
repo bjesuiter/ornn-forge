@@ -1,7 +1,0 @@
-import { createFileRoute } from '@tanstack/react-router'
-import { env } from 'cloudflare:workers'
-import { createCloudflareControlPlane } from '../../../../control-plane.worker'
-
-export const Route = createFileRoute('/api/v1/runners/$')({
-  server: { handlers: { POST: ({ request }) => createCloudflareControlPlane(env).fetch(request) } },
-})

@@ -14,15 +14,12 @@ import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
 import { Route as DashboardExamplesRouteImport } from './routes/dashboard.examples'
-import { Route as ApiV1RunnersRouteImport } from './routes/api/v1/runners'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
-import { Route as ApiV1RunnersSplatRouteImport } from './routes/api/v1/runners/$'
 import { Route as ApiV1RunnerConnectRouteImport } from './routes/api/v1/runner/connect'
 import { Route as ApiV1RunnerOperationRouteImport } from './routes/api/v1/runner/$operation'
 import { Route as ApiV1MessagesOrnnMessageIdRouteImport } from './routes/api/v1/messages/$ornnMessageId'
 import { Route as ApiV1JobsJobIdRouteImport } from './routes/api/v1/jobs/$jobId'
 import { Route as ApiV1GithubWebhookRouteImport } from './routes/api/v1/github/webhook'
-import { Route as ApiV1RunnerSetupSplatRouteImport } from './routes/api/v1/runner/setup/$'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -49,20 +46,10 @@ const DashboardExamplesRoute = DashboardExamplesRouteImport.update({
   path: '/examples',
   getParentRoute: () => DashboardRoute,
 } as any)
-const ApiV1RunnersRoute = ApiV1RunnersRouteImport.update({
-  id: '/api/v1/runners',
-  path: '/api/v1/runners',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
-} as any)
-const ApiV1RunnersSplatRoute = ApiV1RunnersSplatRouteImport.update({
-  id: '/$',
-  path: '/$',
-  getParentRoute: () => ApiV1RunnersRoute,
 } as any)
 const ApiV1RunnerConnectRoute = ApiV1RunnerConnectRouteImport.update({
   id: '/api/v1/runner/connect',
@@ -90,11 +77,6 @@ const ApiV1GithubWebhookRoute = ApiV1GithubWebhookRouteImport.update({
   path: '/api/v1/github/webhook',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiV1RunnerSetupSplatRoute = ApiV1RunnerSetupSplatRouteImport.update({
-  id: '/api/v1/runner/setup/$',
-  path: '/api/v1/runner/setup/$',
-  getParentRoute: () => rootRouteImport,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -103,14 +85,11 @@ export interface FileRoutesByFullPath {
   '/dashboard/examples': typeof DashboardExamplesRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
-  '/api/v1/runners': typeof ApiV1RunnersRouteWithChildren
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
   '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
   '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
   '/api/v1/runner/$operation': typeof ApiV1RunnerOperationRoute
   '/api/v1/runner/connect': typeof ApiV1RunnerConnectRoute
-  '/api/v1/runners/$': typeof ApiV1RunnersSplatRoute
-  '/api/v1/runner/setup/$': typeof ApiV1RunnerSetupSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -118,14 +97,11 @@ export interface FileRoutesByTo {
   '/dashboard/examples': typeof DashboardExamplesRoute
   '/dashboard': typeof DashboardIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
-  '/api/v1/runners': typeof ApiV1RunnersRouteWithChildren
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
   '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
   '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
   '/api/v1/runner/$operation': typeof ApiV1RunnerOperationRoute
   '/api/v1/runner/connect': typeof ApiV1RunnerConnectRoute
-  '/api/v1/runners/$': typeof ApiV1RunnersSplatRoute
-  '/api/v1/runner/setup/$': typeof ApiV1RunnerSetupSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -135,14 +111,11 @@ export interface FileRoutesById {
   '/dashboard/examples': typeof DashboardExamplesRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
-  '/api/v1/runners': typeof ApiV1RunnersRouteWithChildren
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
   '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
   '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
   '/api/v1/runner/$operation': typeof ApiV1RunnerOperationRoute
   '/api/v1/runner/connect': typeof ApiV1RunnerConnectRoute
-  '/api/v1/runners/$': typeof ApiV1RunnersSplatRoute
-  '/api/v1/runner/setup/$': typeof ApiV1RunnerSetupSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -153,14 +126,11 @@ export interface FileRouteTypes {
     | '/dashboard/examples'
     | '/dashboard/'
     | '/api/auth/$'
-    | '/api/v1/runners'
     | '/api/v1/github/webhook'
     | '/api/v1/jobs/$jobId'
     | '/api/v1/messages/$ornnMessageId'
     | '/api/v1/runner/$operation'
     | '/api/v1/runner/connect'
-    | '/api/v1/runners/$'
-    | '/api/v1/runner/setup/$'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -168,14 +138,11 @@ export interface FileRouteTypes {
     | '/dashboard/examples'
     | '/dashboard'
     | '/api/auth/$'
-    | '/api/v1/runners'
     | '/api/v1/github/webhook'
     | '/api/v1/jobs/$jobId'
     | '/api/v1/messages/$ornnMessageId'
     | '/api/v1/runner/$operation'
     | '/api/v1/runner/connect'
-    | '/api/v1/runners/$'
-    | '/api/v1/runner/setup/$'
   id:
     | '__root__'
     | '/'
@@ -184,14 +151,11 @@ export interface FileRouteTypes {
     | '/dashboard/examples'
     | '/dashboard/'
     | '/api/auth/$'
-    | '/api/v1/runners'
     | '/api/v1/github/webhook'
     | '/api/v1/jobs/$jobId'
     | '/api/v1/messages/$ornnMessageId'
     | '/api/v1/runner/$operation'
     | '/api/v1/runner/connect'
-    | '/api/v1/runners/$'
-    | '/api/v1/runner/setup/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -199,13 +163,11 @@ export interface RootRouteChildren {
   DashboardRoute: typeof DashboardRouteWithChildren
   LoginRoute: typeof LoginRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
-  ApiV1RunnersRoute: typeof ApiV1RunnersRouteWithChildren
   ApiV1GithubWebhookRoute: typeof ApiV1GithubWebhookRoute
   ApiV1JobsJobIdRoute: typeof ApiV1JobsJobIdRoute
   ApiV1MessagesOrnnMessageIdRoute: typeof ApiV1MessagesOrnnMessageIdRoute
   ApiV1RunnerOperationRoute: typeof ApiV1RunnerOperationRoute
   ApiV1RunnerConnectRoute: typeof ApiV1RunnerConnectRoute
-  ApiV1RunnerSetupSplatRoute: typeof ApiV1RunnerSetupSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -245,26 +207,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardExamplesRouteImport
       parentRoute: typeof DashboardRoute
     }
-    '/api/v1/runners': {
-      id: '/api/v1/runners'
-      path: '/api/v1/runners'
-      fullPath: '/api/v1/runners'
-      preLoaderRoute: typeof ApiV1RunnersRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
       fullPath: '/api/auth/$'
       preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
-    }
-    '/api/v1/runners/$': {
-      id: '/api/v1/runners/$'
-      path: '/$'
-      fullPath: '/api/v1/runners/$'
-      preLoaderRoute: typeof ApiV1RunnersSplatRouteImport
-      parentRoute: typeof ApiV1RunnersRoute
     }
     '/api/v1/runner/connect': {
       id: '/api/v1/runner/connect'
@@ -301,13 +249,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiV1GithubWebhookRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/v1/runner/setup/$': {
-      id: '/api/v1/runner/setup/$'
-      path: '/api/v1/runner/setup/$'
-      fullPath: '/api/v1/runner/setup/$'
-      preLoaderRoute: typeof ApiV1RunnerSetupSplatRouteImport
-      parentRoute: typeof rootRouteImport
-    }
   }
 }
 
@@ -325,30 +266,16 @@ const DashboardRouteWithChildren = DashboardRoute._addFileChildren(
   DashboardRouteChildren,
 )
 
-interface ApiV1RunnersRouteChildren {
-  ApiV1RunnersSplatRoute: typeof ApiV1RunnersSplatRoute
-}
-
-const ApiV1RunnersRouteChildren: ApiV1RunnersRouteChildren = {
-  ApiV1RunnersSplatRoute: ApiV1RunnersSplatRoute,
-}
-
-const ApiV1RunnersRouteWithChildren = ApiV1RunnersRoute._addFileChildren(
-  ApiV1RunnersRouteChildren,
-)
-
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DashboardRoute: DashboardRouteWithChildren,
   LoginRoute: LoginRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
-  ApiV1RunnersRoute: ApiV1RunnersRouteWithChildren,
   ApiV1GithubWebhookRoute: ApiV1GithubWebhookRoute,
   ApiV1JobsJobIdRoute: ApiV1JobsJobIdRoute,
   ApiV1MessagesOrnnMessageIdRoute: ApiV1MessagesOrnnMessageIdRoute,
   ApiV1RunnerOperationRoute: ApiV1RunnerOperationRoute,
   ApiV1RunnerConnectRoute: ApiV1RunnerConnectRoute,
-  ApiV1RunnerSetupSplatRoute: ApiV1RunnerSetupSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
