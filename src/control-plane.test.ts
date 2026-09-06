@@ -208,6 +208,35 @@ test('a paused Runner receives no new lease until an Operator resumes it', async
   expect(await (await poll()).json()).toMatchObject({ type: 'runner.lease', payload: { jobId } })
 })
 
+test('records a Runner fault until that Runner completes a valid protocol operation', async () => {
+  const store = createInMemoryInvocationStore()
+  const faults: string[] = []
+  let successfulOperations = 0
+  store.recordRunnerFault = async (_runnerId, fault) => { faults.push(fault.code) }
+  store.recordRunnerSuccess = async () => { successfulOperations += 1 }
+  const app = createControlPlane({
+    store,
+    githubWebhookSecret: webhookSecret,
+    githubInstallationId: '42',
+    githubRepositoryId: '99',
+    operatorBearerSecret: operatorSecret,
+    runnerCredentialId: 'runner_homeserv1',
+    runnerCredentialSecret: 'r'.repeat(32),
+  })
+  const request = (operation: string, payload: Record<string, unknown>) => app.fetch(new Request(`https://ornn.example/api/v1/runner/${operation}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${'r'.repeat(32)}`, 'content-type': 'application/json', 'x-ornn-runner-id': 'runner_homeserv1' },
+    body: JSON.stringify(envelope(`runner.${operation}`, payload)),
+  }))
+
+  expect(await (await request('report', { runnerId: 'runner_homeserv1', fault: { code: 'runner.operation_failed' } })).json())
+    .toMatchObject({ type: 'runner.accepted' })
+  expect(faults).toEqual(['runner.operation_failed'])
+
+  expect(await (await request('poll', { runnerId: 'runner_homeserv1' })).json()).toMatchObject({ type: 'runner.no_work' })
+  expect(successfulOperations).toBe(1)
+})
+
 test('rejects unsupported protocol and wrong lease tokens without changing the pending Job', async () => {
   const app = createControlPlane({
     store: createInMemoryInvocationStore(), githubWebhookSecret: webhookSecret, githubInstallationId: '42', githubRepositoryId: '99',

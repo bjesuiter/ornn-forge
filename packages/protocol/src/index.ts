@@ -6,7 +6,18 @@ export type RunnerEnvelope<TType extends string, TPayload> = {
   payload: TPayload
 }
 
-export type RunnerPoll = RunnerEnvelope<'runner.poll', { runnerId: string }>
+export type RunnerProfile = {
+  release: string
+  platform: string
+  architecture: string
+  runtime: string
+  executor: string
+  capacity: number
+}
+
+export type RunnerFault = { code: string }
+
+export type RunnerPoll = RunnerEnvelope<'runner.poll', { runnerId: string; profile?: RunnerProfile }>
 export type RunnerHeartbeat = RunnerEnvelope<'lease.heartbeat', {
   runnerId: string
   jobId: string
@@ -18,6 +29,7 @@ export type RunnerResult = RunnerEnvelope<'lease.result', {
   leaseToken: string
   artifact: AnalysisArtifact
 }>
+export type RunnerReport = RunnerEnvelope<'runner.report', { runnerId: string; fault: RunnerFault }>
 
 export type AnalysisArtifact = {
   schemaVersion: 1
@@ -39,6 +51,7 @@ export type RunnerResponse =
   | RunnerEnvelope<'runner.no_work', { retryAfterSeconds: number }>
   | RunnerEnvelope<'runner.lease', LeaseGrant>
   | RunnerEnvelope<'lease.accepted', { jobId: string }>
+  | RunnerEnvelope<'runner.accepted', Record<string, never>>
   | RunnerEnvelope<'lease.rejected', { code: 'lease_invalid' | 'lease_expired' | 'runner_unauthorized' | 'invalid_artifact' }>
   | RunnerEnvelope<'protocol.unsupported', { supportedMajor: typeof RUNNER_PROTOCOL_MAJOR }>
 
@@ -66,6 +79,21 @@ export function isAnalysisArtifact(value: unknown): value is AnalysisArtifact {
       typeof attachment.size === 'number' && Number.isSafeInteger(attachment.size) && attachment.size >= 0,
     )
   )
+}
+
+export function isRunnerProfile(value: unknown): value is RunnerProfile {
+  if (!isRecord(value)) return false
+  return isShortText(value.release) && isShortText(value.platform) && isShortText(value.architecture)
+    && isShortText(value.runtime) && isShortText(value.executor)
+    && typeof value.capacity === 'number' && Number.isInteger(value.capacity) && value.capacity >= 1 && value.capacity <= 32
+}
+
+export function isRunnerFault(value: unknown): value is RunnerFault {
+  return isRecord(value) && isShortText(value.code)
+}
+
+function isShortText(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 100
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

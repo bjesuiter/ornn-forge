@@ -6,6 +6,7 @@ const migration = readFileSync(new URL('../migrations/0001_admit_analyze_invocat
 const runnerMigration = readFileSync(new URL('../migrations/0002_fixture_runner.sql', import.meta.url), 'utf8')
 const runnerPresenceMigration = readFileSync(new URL('../migrations/0005_record_runner_presence.sql', import.meta.url), 'utf8')
 const runnerPausesMigration = readFileSync(new URL('../migrations/0006_pause_runners.sql', import.meta.url), 'utf8')
+const runnerDiagnosticsMigration = readFileSync(new URL('../migrations/0007_record_runner_diagnostics.sql', import.meta.url), 'utf8')
 
 test('the admission migration creates immutable provenance and append-only events', () => {
   const database = new Database(':memory:')
@@ -31,6 +32,7 @@ test('the fixture Runner migration stores only credential and lease digests', ()
   database.exec(runnerMigration)
   database.exec(runnerPresenceMigration)
   database.exec(runnerPausesMigration)
+  database.exec(runnerDiagnosticsMigration)
   database.run("INSERT INTO runner_credentials VALUES ('runner_homeserv1', 'digest-only', '2026-09-05T00:00:00.000Z')")
   database.run(`INSERT INTO deliveries VALUES ('delivery', lower(hex(zeroblob(32))), 'inv_v1_a', 'job_v1_a', '2026-09-05T00:00:00.000Z')`)
   database.run(`INSERT INTO invocations VALUES (
@@ -50,4 +52,10 @@ test('the fixture Runner migration stores only credential and lease digests', ()
   expect(database.query('SELECT last_seen_at FROM runner_presence').get()).toEqual({ last_seen_at: '2026-09-05T00:00:10.000Z' })
   database.run("INSERT INTO runner_pauses VALUES ('runner_homeserv1', 1, '2026-09-05T00:00:15.000Z')")
   expect(database.query('SELECT paused FROM runner_pauses').get()).toEqual({ paused: 1 })
+  database.run(`INSERT INTO runner_profiles VALUES (
+    'runner_homeserv1', 'v1.2.3', 'linux', 'arm64', 'Bun 1.4.0', 'docker', 2, '2026-09-05T00:00:15.000Z'
+  )`)
+  database.run("INSERT INTO runner_error_states VALUES ('runner_homeserv1', 'runner.operation_failed', '2026-09-05T00:00:20.000Z')")
+  expect(database.query('SELECT capacity FROM runner_profiles').get()).toEqual({ capacity: 2 })
+  expect(database.query('SELECT code FROM runner_error_states').get()).toEqual({ code: 'runner.operation_failed' })
 })

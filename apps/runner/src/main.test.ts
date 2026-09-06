@@ -12,10 +12,11 @@ test('the Runner reads its mounted credential file without placing the secret in
     return 'credential-from-file\n'
   })
 
-  expect(config).toEqual({
+  expect(config).toMatchObject({
     controlPlaneUrl: 'https://control.test',
     runnerId: 'runner_local_debug',
     credential: 'credential-from-file',
+    profile: { platform: process.platform, architecture: process.arch, executor: 'fixture', capacity: 1 },
   })
 })
 
@@ -36,6 +37,11 @@ test('the deterministic Runner fixture uses the production polling protocol', as
     method: 'POST', headers: { 'x-github-event': 'issue_comment', 'x-github-delivery': 'runner-fixture', 'x-hub-signature-256': `sha256=${signature}` }, body: source,
   }))
   const request = (input: URL, init?: RequestInit) => app.fetch(new Request(input, init))
-  await expect(executeFixtureLease({ controlPlaneUrl: 'https://control.test', runnerId: 'runner_homeserv1', credential: 'r'.repeat(32) }, request))
+  await expect(executeFixtureLease({
+    controlPlaneUrl: 'https://control.test',
+    runnerId: 'runner_homeserv1',
+    credential: 'r'.repeat(32),
+    profile: { release: 'test', platform: 'linux', architecture: 'arm64', runtime: 'Bun test', executor: 'fixture', capacity: 1 },
+  }, request))
     .resolves.toBe('completed')
 })

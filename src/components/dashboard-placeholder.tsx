@@ -90,32 +90,89 @@ export function Dashboard({
             <ul className="fd-runner-list">
               {runners.map((runner) => (
                 <li key={runner.id} className="fd-runner-row">
-                  <div>
-                    <h2>{runner.id}</h2>
-                    <div className="fd-runner-state">
-                      <p className={`fd-runner-presence ${runner.online ? 'is-online' : 'is-offline'}`}>
-                        <span aria-hidden="true" />
-                        {runner.online ? 'Online' : 'Offline'}
-                      </p>
-                      {runner.paused && (
-                        <span className="fd-runner-pause">
-                          Pausiert
-                        </span>
-                      )}
+                  <div className="fd-runner-summary">
+                    <div>
+                      <h2>{runner.id}</h2>
+                      <div className="fd-runner-state">
+                        <p className={`fd-runner-presence ${runner.online ? 'is-online' : 'is-offline'}`}>
+                          <span aria-hidden="true" />
+                          {runner.online ? 'Online' : 'Offline'}
+                        </p>
+                        {runner.paused && <span className="fd-runner-pause">Pausiert</span>}
+                        {runner.fault && <span className="fd-runner-fault">Fehler</span>}
+                      </div>
                     </div>
+                    <p className="fd-runner-seen">
+                      Letzter Kontakt {runner.lastSeenAt ? relativeTime(runner.lastSeenAt) : 'nie'}
+                      {runner.lastSeenAt && <> · {dateTime(runner.lastSeenAt)}</>}
+                    </p>
                   </div>
-                  <div className="fd-runner-work">
-                    <span>Aktuelle Arbeit</span>
-                    {runner.workingOn ? (
-                      <a
-                        href={`https://github.com/${runner.workingOn.repository}/issues/${runner.workingOn.issueNumber}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {runner.workingOn.repository} #{runner.workingOn.issueNumber}: {runner.workingOn.issueTitle}
-                      </a>
-                    ) : (
-                      <strong>Keine aktive Arbeit</strong>
+                  <div className="fd-runner-details">
+                    <section className="fd-runner-detail">
+                      <span>Aktuelle Arbeit</span>
+                      {runner.activeJobs.length === 0 ? (
+                        <strong>Keine aktive Arbeit</strong>
+                      ) : (
+                        <ul className="fd-runner-job-list">
+                          {runner.activeJobs.map((job) => (
+                            <li key={job.id}>
+                              <a href={`https://github.com/${job.repository}/issues/${job.issueNumber}`} target="_blank" rel="noreferrer">
+                                {job.repository} #{job.issueNumber}: {job.issueTitle}
+                              </a>
+                              <small>
+                                {job.id} · Lease {job.generation} · läuft {elapsed(job.startedAt)} · Heartbeat {relativeTime(job.lastHeartbeatAt)}
+                              </small>
+                              <small>Lease läuft ab {dateTime(job.expiresAt)}</small>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </section>
+                    <section className="fd-runner-detail">
+                      <span>Kapazität</span>
+                      <strong>{runner.reservations} von {runner.profile?.capacity ?? 1} reserviert</strong>
+                      <small>Reservierungen bleiben bis zur verifizierten Sandbox-Bereinigung bestehen.</small>
+                    </section>
+                    {runner.fault && (
+                      <section className="fd-runner-detail fd-runner-detail-fault">
+                        <span>Letzter Fehler</span>
+                        <strong>{runner.fault.code}</strong>
+                        <small>{relativeTime(runner.fault.occurredAt)} · {dateTime(runner.fault.occurredAt)}</small>
+                      </section>
+                    )}
+                    <section className="fd-runner-detail">
+                      <span>Letztes Ergebnis</span>
+                      {runner.lastResult ? (
+                        <>
+                          <strong>Erfolgreich nach {elapsed(runner.lastResult.startedAt, runner.lastResult.completedAt)}</strong>
+                          <a href={`https://github.com/${runner.lastResult.repository}/issues/${runner.lastResult.issueNumber}`} target="_blank" rel="noreferrer">
+                            {runner.lastResult.repository} #{runner.lastResult.issueNumber}: {runner.lastResult.issueTitle}
+                          </a>
+                          <small>{relativeTime(runner.lastResult.completedAt)}</small>
+                        </>
+                      ) : <strong>Noch kein abgeschlossener Job</strong>}
+                    </section>
+                    {runner.profile && (
+                      <section className="fd-runner-detail">
+                        <span>Runner-Umgebung</span>
+                        <strong>{runner.profile.release} · {runner.profile.executor}</strong>
+                        <small>{runner.profile.platform}/{runner.profile.architecture} · {runner.profile.runtime}</small>
+                      </section>
+                    )}
+                    {runner.recentJobs.length > 1 && (
+                      <section className="fd-runner-detail fd-runner-history">
+                        <span>Letzte Jobs</span>
+                        <ul>
+                          {runner.recentJobs.slice(1).map((job) => (
+                            <li key={job.id}>
+                              <a href={`https://github.com/${job.repository}/issues/${job.issueNumber}`} target="_blank" rel="noreferrer">
+                                #{job.issueNumber} {job.issueTitle}
+                              </a>
+                              <small>Erfolgreich · {elapsed(job.startedAt, job.completedAt)} · {relativeTime(job.completedAt)}</small>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
                     )}
                   </div>
                   <button
@@ -146,4 +203,24 @@ export function Dashboard({
       </main>
     </div>
   )
+}
+
+function dateTime(value: string) {
+  return new Intl.DateTimeFormat('de-DE', { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value))
+}
+
+function relativeTime(value: string) {
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(value).getTime()) / 1_000))
+  if (seconds < 60) return `vor ${seconds} s`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `vor ${minutes} min`
+  const hours = Math.round(minutes / 60)
+  return `vor ${hours} h`
+}
+
+function elapsed(startedAt: string, endedAt = new Date().toISOString()) {
+  const seconds = Math.max(0, Math.round((new Date(endedAt).getTime() - new Date(startedAt).getTime()) / 1_000))
+  if (seconds < 60) return `${seconds} s`
+  const minutes = Math.floor(seconds / 60)
+  return `${minutes} min ${seconds % 60} s`
 }

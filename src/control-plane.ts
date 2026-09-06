@@ -1,9 +1,13 @@
 import {
   envelope,
   isAnalysisArtifact,
+  isRunnerFault,
+  isRunnerProfile,
   parseRunnerEnvelope,
   type AnalysisArtifact,
   type LeaseGrant,
+  type RunnerFault,
+  type RunnerProfile,
 } from '@ornn-forge/protocol'
 import type { CleanupStatus, ExecutionOutcome, OrnnMessageState } from '@ornn-forge/domain'
 
@@ -95,10 +99,13 @@ export interface InvocationStore {
   inspectJob(jobId: string): Promise<JobInspection | undefined>
   inspectMessage?(ornnMessageId: string): Promise<JobInspection | undefined>
   authenticateRunner?(runnerId: string, credentialDigest: string): Promise<boolean>
+  updateRunnerProfile?(runnerId: string, profile: RunnerProfile): Promise<void>
   pollRunner?(runnerId: string): Promise<LeaseGrant | undefined>
   setRunnerPaused?(runnerId: string, paused: boolean): Promise<boolean>
   heartbeatLease?(input: LeaseInput): Promise<boolean>
   completeLease?(input: LeaseInput & { artifact: AnalysisArtifact }): Promise<'accepted' | 'invalid_artifact'>
+  recordRunnerSuccess?(runnerId: string): Promise<void>
+  recordRunnerFault?(runnerId: string, fault: RunnerFault): Promise<void>
   recordMessagePublication?(jobId: string, update: { githubCommentId?: string; attempt: OrnnMessageState['latestAttempt'] }): Promise<void>
 }
 
@@ -124,9 +131,9 @@ export function createControlPlane(options: ControlPlaneOptions) {
         return admitGitHubDelivery(request, options)
       }
 
-      const runnerMatch = /^\/api\/v1\/runner\/(poll|heartbeat|result)$/.exec(url.pathname)
+      const runnerMatch = /^\/api\/v1\/runner\/(poll|heartbeat|result|report)$/.exec(url.pathname)
       if (request.method === 'POST' && runnerMatch) {
-        return handleRunnerRequest(request, runnerMatch[1] as 'poll' | 'heartbeat' | 'result', options, runnerCredential)
+        return handleRunnerRequest(request, runnerMatch[1] as 'poll' | 'heartbeat' | 'result' | 'report', options, runnerCredential)
       }
 
       const jobMatch = /^\/api\/v1\/jobs\/([^/]+)$/.exec(url.pathname)
@@ -164,7 +171,7 @@ export function createControlPlane(options: ControlPlaneOptions) {
 
 async function handleRunnerRequest(
   request: Request,
-  operation: 'poll' | 'heartbeat' | 'result',
+  operation: 'poll' | 'heartbeat' | 'result' | 'report',
   options: ControlPlaneOptions,
   expectedCredential: Uint8Array | undefined,
 ): Promise<Response> {
@@ -184,34 +191,56 @@ async function handleRunnerRequest(
   try {
     body = await request.json()
   } catch {
+    await recordRunnerFault(options, runnerId, 'runner.invalid_request')
     return runnerJson(envelope('lease.rejected', { code: 'invalid_artifact' }), 400)
   }
   const parsed = parseRunnerEnvelope(body)
   if (!parsed.ok) {
     if (parsed.code === 'unsupported_major') {
+      await recordRunnerFault(options, runnerId, 'runner.unsupported_protocol')
       return runnerJson(envelope('protocol.unsupported', { supportedMajor: 1 }), 426)
     }
+    await recordRunnerFault(options, runnerId, 'runner.invalid_request')
     return runnerJson(envelope('lease.rejected', { code: 'invalid_artifact' }), 400)
   }
   if (parsed.value.type !== `runner.${operation}` || parsed.value.payload.runnerId !== runnerId) {
+    await recordRunnerFault(options, runnerId, 'runner.invalid_request')
     return runnerJson(envelope('lease.rejected', { code: 'lease_invalid' }), 403)
   }
 
   if (operation === 'poll') {
+    if (parsed.value.payload.profile !== undefined && !isRunnerProfile(parsed.value.payload.profile)) {
+      await recordRunnerFault(options, runnerId, 'runner.invalid_profile')
+      return runnerJson(envelope('lease.rejected', { code: 'invalid_artifact' }), 422)
+    }
+    if (parsed.value.payload.profile) await options.store.updateRunnerProfile?.(runnerId, parsed.value.payload.profile)
     const lease = options.store.pollRunner ? await options.store.pollRunner(runnerId) : undefined
+    await options.store.recordRunnerSuccess?.(runnerId)
     return runnerJson(lease ? envelope('runner.lease', lease) : envelope('runner.no_work', { retryAfterSeconds: 5 }))
+  }
+  if (operation === 'report') {
+    if (!isRunnerFault(parsed.value.payload.fault)) {
+      await recordRunnerFault(options, runnerId, 'runner.invalid_fault')
+      return runnerJson(envelope('lease.rejected', { code: 'invalid_artifact' }), 422)
+    }
+    await options.store.recordRunnerFault?.(runnerId, parsed.value.payload.fault)
+    return runnerJson(envelope('runner.accepted', {}))
   }
   const leaseInput = parsed.value.payload
   if (typeof leaseInput.jobId !== 'string' || typeof leaseInput.leaseToken !== 'string') {
+    await recordRunnerFault(options, runnerId, 'runner.invalid_lease')
     return runnerJson(envelope('lease.rejected', { code: 'lease_invalid' }), 403)
   }
   if (operation === 'heartbeat') {
     const accepted = options.store.heartbeatLease && await options.store.heartbeatLease({ runnerId, jobId: leaseInput.jobId, leaseToken: leaseInput.leaseToken })
+    if (accepted) await options.store.recordRunnerSuccess?.(runnerId)
+    else await recordRunnerFault(options, runnerId, 'runner.invalid_lease')
     return accepted
       ? runnerJson(envelope('lease.accepted', { jobId: leaseInput.jobId }))
       : runnerJson(envelope('lease.rejected', { code: 'lease_invalid' }), 403)
   }
   if (!isAnalysisArtifact(leaseInput.artifact)) {
+    await recordRunnerFault(options, runnerId, 'runner.invalid_artifact')
     return runnerJson(envelope('lease.rejected', { code: 'invalid_artifact' }), 422)
   }
   const completed = await options.store.completeLease?.({
@@ -220,10 +249,19 @@ async function handleRunnerRequest(
     leaseToken: leaseInput.leaseToken,
     artifact: leaseInput.artifact,
   })
-  if (completed === 'accepted') await publishMessage(options, leaseInput.jobId)
+  if (completed === 'accepted') {
+    await options.store.recordRunnerSuccess?.(runnerId)
+    await publishMessage(options, leaseInput.jobId)
+  } else {
+    await recordRunnerFault(options, runnerId, 'runner.invalid_lease')
+  }
   return completed === 'accepted'
     ? runnerJson(envelope('lease.accepted', { jobId: leaseInput.jobId }))
     : runnerJson(envelope('lease.rejected', { code: 'lease_invalid' }), 403)
+}
+
+async function recordRunnerFault(options: ControlPlaneOptions, runnerId: string, code: string) {
+  await options.store.recordRunnerFault?.(runnerId, { code })
 }
 
 async function admitGitHubDelivery(
@@ -534,6 +572,7 @@ export function createInMemoryInvocationStore(): InvocationStore {
   const recordsByDelivery = new Map<string, StoredRecord>()
   const inspectionsByJob = new Map<string, JobInspection>()
   const runnerCredentials = new Map<string, string>()
+  const runnerProfiles = new Map<string, RunnerProfile>()
   const pausedRunners = new Set<string>()
   const leasesByJob = new Map<string, {
     runnerId: string
@@ -577,9 +616,13 @@ export function createInMemoryInvocationStore(): InvocationStore {
       }
       return existing === credentialDigest
     },
+    async updateRunnerProfile(runnerId, profile) {
+      runnerProfiles.set(runnerId, profile)
+    },
     async pollRunner(runnerId) {
       if (pausedRunners.has(runnerId)) return undefined
-      if ([...leasesByJob.values()].some((lease) => lease.runnerId === runnerId)) return undefined
+      const capacity = runnerProfiles.get(runnerId)?.capacity ?? 1
+      if ([...leasesByJob.values()].filter((lease) => lease.runnerId === runnerId).length >= capacity) return undefined
       const inspection = [...inspectionsByJob.values()].find((candidate) => candidate.job.state === 'pending')
       if (!inspection) return undefined
       const token = opaqueId('lease')
@@ -630,6 +673,8 @@ export function createInMemoryInvocationStore(): InvocationStore {
       leasesByJob.delete(input.jobId)
       return 'accepted'
     },
+    async recordRunnerSuccess() {},
+    async recordRunnerFault() {},
     async recordMessagePublication(jobId, update) {
       const message = inspectionsByJob.get(jobId)?.message
       if (!message) return
@@ -872,10 +917,25 @@ class D1InvocationStore implements InvocationStore {
     return true
   }
 
+  async updateRunnerProfile(runnerId: string, profile: RunnerProfile): Promise<void> {
+    await this.database.prepare(`INSERT INTO runner_profiles (
+      runner_id, release, platform, architecture, runtime, executor, capacity, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(runner_id) DO UPDATE SET release = excluded.release, platform = excluded.platform,
+      architecture = excluded.architecture, runtime = excluded.runtime, executor = excluded.executor,
+      capacity = excluded.capacity, updated_at = excluded.updated_at`).bind(
+      runnerId, profile.release, profile.platform, profile.architecture, profile.runtime, profile.executor,
+      profile.capacity, new Date().toISOString(),
+    ).run()
+  }
+
   async pollRunner(runnerId: string): Promise<LeaseGrant | undefined> {
-    const heldLease = await this.database.prepare(`SELECT l.job_id FROM runner_leases l
-      JOIN jobs j ON j.job_id = l.job_id WHERE l.runner_id = ? AND j.state = 'leased'`).bind(runnerId).first()
-    if (heldLease) return undefined
+    const capacity = await this.database.prepare(`SELECT COALESCE((SELECT capacity FROM runner_profiles WHERE runner_id = ?), 1) AS capacity`)
+      .bind(runnerId).first<{ capacity: number }>()
+    const reservations = await this.database.prepare(`SELECT COUNT(*) AS count FROM runner_leases l
+      JOIN jobs j ON j.job_id = l.job_id WHERE l.runner_id = ? AND j.cleanup_status IS NOT 'verified'`).bind(runnerId)
+      .first<{ count: number }>()
+    if ((reservations?.count ?? 0) >= (capacity?.capacity ?? 1)) return undefined
     const candidate = await this.database.prepare(`SELECT j.job_id, i.github_issue_number, i.github_issue_title,
       i.github_issue_body, i.github_comment_body FROM jobs j JOIN invocations i ON i.invocation_id = j.invocation_id
       WHERE j.state = 'pending' ORDER BY j.created_at ASC LIMIT 1`).first<{
@@ -892,8 +952,11 @@ class D1InvocationStore implements InvocationStore {
     await this.database.batch([
       this.database.prepare(`INSERT INTO runner_leases (job_id, runner_id, generation, token_digest, expires_at, last_heartbeat_at, created_at)
         SELECT ?, ?, 1, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'pending')
-        AND NOT EXISTS (SELECT 1 FROM runner_pauses WHERE runner_id = ? AND paused = 1)`).bind(
-        candidate.job_id, runnerId, tokenDigest, expiresAt, now, now, candidate.job_id, runnerId,
+        AND NOT EXISTS (SELECT 1 FROM runner_pauses WHERE runner_id = ? AND paused = 1)
+        AND (SELECT COUNT(*) FROM runner_leases l JOIN jobs j ON j.job_id = l.job_id
+          WHERE l.runner_id = ? AND j.cleanup_status IS NOT 'verified') <
+          COALESCE((SELECT capacity FROM runner_profiles WHERE runner_id = ?), 1)`).bind(
+        candidate.job_id, runnerId, tokenDigest, expiresAt, now, now, candidate.job_id, runnerId, runnerId, runnerId,
       ),
       this.database.prepare(`UPDATE jobs SET state = 'leased' WHERE job_id = ? AND state = 'pending'
         AND EXISTS (SELECT 1 FROM runner_leases WHERE job_id = ? AND token_digest = ?)`).bind(candidate.job_id, candidate.job_id, tokenDigest),
@@ -927,6 +990,16 @@ class D1InvocationStore implements InvocationStore {
       runnerId, paused ? 1 : 0, new Date().toISOString(), runnerId,
     ).run()
     return result.meta.changes === 1
+  }
+
+  async recordRunnerSuccess(runnerId: string): Promise<void> {
+    await this.database.prepare('DELETE FROM runner_error_states WHERE runner_id = ?').bind(runnerId).run()
+  }
+
+  async recordRunnerFault(runnerId: string, fault: RunnerFault): Promise<void> {
+    await this.database.prepare(`INSERT INTO runner_error_states (runner_id, code, occurred_at) VALUES (?, ?, ?)
+      ON CONFLICT(runner_id) DO UPDATE SET code = excluded.code, occurred_at = excluded.occurred_at`)
+      .bind(runnerId, fault.code, new Date().toISOString()).run()
   }
 
   async heartbeatLease(input: LeaseInput): Promise<boolean> {
