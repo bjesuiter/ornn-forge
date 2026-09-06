@@ -13,8 +13,9 @@
     "runner:debug": "DEV_ENV=runner-debug bunx varlock run -- scripts/runner-debug",
     "runner:setup": "DEV_ENV=runner-debug bunx varlock run -- bun apps/runner/src/setup-debug.ts",
     "cf-typegen": "wrangler types",
-    "test": "bun test",
+    "test": "bun test src apps packages",
     "runner:fixture": "bun run --filter @ornn-forge/runner fixture",
+    "test:worker": "vitest run --config vitest.config.ts --max-workers=1 --no-isolate",
     "test:smoke:d1": "bun run scripts/smoke-deployed-d1.ts",
     "test:smoke:runner-setup": "bun run scripts/smoke-deployed-runner-setup.ts"
   },
@@ -29,15 +30,17 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.44.0",
-    "bun-types": "1.4.2",
+    "@cloudflare/vitest-plugin": "^1.1.4",
     "@types/node": "26.1.1",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@varlock/bitwarden-plugin": "^2.0.0",
     "@vitejs/plugin-react": "6.0.3",
+    "bun-types": "1.4.2",
     "typescript": "7.0.2",
     "varlock": "^1.10.0",
     "vite": "8.1.4",
+    "vitest": "^4.1.0",
     "wrangler": "4.110.0"
   }
 }

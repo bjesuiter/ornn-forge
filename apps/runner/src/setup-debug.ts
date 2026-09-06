@@ -1,4 +1,4 @@
-import { enrollRemoteRunner } from './setup'
+import { enrollRemoteRunner, startDebugRunnerUntilSynchronized } from './setup'
 
 const controlPlaneUrl = process.env.ORNN_CONTROL_PLANE_URL
 if (!controlPlaneUrl) throw new Error('ORNN_CONTROL_PLANE_URL is required')
@@ -12,7 +12,20 @@ const runner = await enrollRemoteRunner({
     await writeRunnerId(runnerId)
   },
 })
-process.stdout.write(`Remote Runner ${runner.id} enrolled. Its authenticated startup and control-connection sync are delivered in #49.\n`)
+await startDebugRunnerUntilSynchronized({ start: startDebugRunner, synchronized: hasSynchronizedControlConnection })
+process.stdout.write(`Remote Runner ${runner.id} enrolled and its authenticated control connection synchronized.\n`)
+
+async function startDebugRunner(): Promise<void> {
+  const process = Bun.spawn(['bun', 'run', 'runner:debug', '--', 'up', '-d', 'runner'], { stdout: 'inherit', stderr: 'inherit' })
+  if (await process.exited !== 0) throw new Error('Could not start the debug Remote Runner service')
+}
+
+async function hasSynchronizedControlConnection(): Promise<boolean> {
+  const process = Bun.spawn([
+    'bun', 'run', 'runner:debug', '--', 'exec', '-T', 'runner', 'test', '-f', '/var/lib/ornn-runner/control-connection.ready',
+  ], { stdout: 'ignore', stderr: 'ignore' })
+  return await process.exited === 0
+}
 
 async function storeCredentialInKeychain(credential: string): Promise<void> {
   const process = Bun.spawn([

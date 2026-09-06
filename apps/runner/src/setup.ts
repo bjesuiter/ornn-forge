@@ -40,6 +40,25 @@ export function createRunnerCredential(): string {
   return Buffer.from(bytes).toString('base64url')
 }
 
+export async function startDebugRunnerUntilSynchronized({
+  start,
+  synchronized,
+  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  timeoutMilliseconds = 45_000,
+}: {
+  start: () => Promise<void>
+  synchronized: () => Promise<boolean>
+  sleep?: (milliseconds: number) => Promise<void>
+  timeoutMilliseconds?: number
+}): Promise<void> {
+  await start()
+  for (let elapsed = 0; elapsed < timeoutMilliseconds; elapsed += 500) {
+    if (await synchronized()) return
+    await sleep(500)
+  }
+  throw new Error('Remote Runner did not synchronize its control connection before setup timed out')
+}
+
 function setupRunnerFromResponse(value: unknown): SetupRunner | undefined {
   if (!isRecord(value) || !isRecord(value.runner)) return undefined
   const { id, desiredCapacity } = value.runner

@@ -1,4 +1,12 @@
-import { envelope, type LeaseGrant, type RunnerProfile, type RunnerResponse } from '@ornn-forge/protocol'
+import {
+  envelope,
+  parseRunnerEnvelope,
+  type LeaseGrant,
+  type RunnerCommandJournalEntry,
+  type RunnerLeaseClaim,
+  type RunnerProfile,
+} from '@ornn-forge/protocol'
+import { unlink } from 'node:fs/promises'
 
 export type RemoteRunnerConfig = {
   controlPlaneUrl: string
@@ -7,12 +15,31 @@ export type RemoteRunnerConfig = {
   profile: RunnerProfile
 }
 
-type HttpRequest = (input: URL, init?: RequestInit) => Promise<Response>
-type CredentialFileReader = (path: string) => Promise<string>
+export type RunnerControlState = {
+  activeLeases: RunnerLeaseClaim[]
+  commandJournal: RunnerCommandJournalEntry[]
+}
+
+export type RunnerStateStore = {
+  load(): Promise<RunnerControlState>
+  save(state: RunnerControlState): Promise<void>
+  markSynchronized(): Promise<void>
+  clearSynchronization?(): Promise<void>
+}
+
+export type ControlSocket = {
+  addEventListener(type: 'open' | 'message' | 'close' | 'error', listener: (event: { data?: unknown }) => void): void
+  close(): void
+  send(message: string): void
+}
+
+export type WebSocketFactory = (url: string, headers: Record<string, string>) => ControlSocket
+
+type Sleep = (milliseconds: number) => Promise<void>
 
 export async function remoteRunnerConfigFromEnvironment(
   environment: Record<string, string | undefined> = process.env,
-  readCredentialFile: CredentialFileReader = (path) => Bun.file(path).text(),
+  readCredentialFile: (path: string) => Promise<string> = (path) => Bun.file(path).text(),
 ): Promise<RemoteRunnerConfig> {
   const controlPlaneUrl = environment.ORNN_CONTROL_PLANE_URL
   const runnerId = environment.ORNN_RUNNER_ID
@@ -42,38 +69,224 @@ export async function remoteRunnerConfigFromEnvironment(
   }
 }
 
-export async function executeFixtureLease(
+export async function runRemoteRunner(
   config: RemoteRunnerConfig,
-  request: HttpRequest = fetch,
-): Promise<'idle' | 'completed'> {
-  try {
-    const poll = await call(config, 'poll', envelope('runner.poll', { runnerId: config.runnerId, profile: config.profile }), request)
-    const response = await poll.json() as RunnerResponse
-    if (response.type === 'runner.no_work') return 'idle'
-    if (response.type !== 'runner.lease') throw new Error(`Runner poll rejected: ${response.type}`)
-    const lease = response.payload
-    await accepted(call(config, 'heartbeat', envelope('runner.heartbeat', leaseScope(config, lease)), request))
-    await accepted(call(config, 'result', envelope('runner.result', {
-      ...leaseScope(config, lease),
-      artifact: {
-        schemaVersion: 1,
-        kind: 'plan',
-        summary: 'Fixture analysis complete',
-        details: 'The deterministic Remote Runner fixture completed through the production protocol.',
-      },
-    }), request))
-    return 'completed'
-  } catch (error) {
-    await call(config, 'report', envelope('runner.report', {
-      runnerId: config.runnerId,
-      fault: { code: error instanceof Error ? 'runner.operation_failed' : 'runner.unknown_failure' },
-    }), request)
-    throw error
+  options: {
+    stateStore?: RunnerStateStore
+    createSocket?: WebSocketFactory
+    sleep?: Sleep
+    random?: () => number
+    signal?: AbortSignal
+    onSynchronized?: () => void
+  } = {},
+): Promise<void> {
+  const stateStore = options.stateStore ?? fileRunnerStateStore()
+  const createSocket = options.createSocket ?? bunWebSocket
+  const sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)))
+  const random = options.random ?? Math.random
+  await stateStore.clearSynchronization?.()
+  let attempt = 0
+  while (!options.signal?.aborted) {
+    try {
+      const connection = await openControlConnection(config, stateStore, createSocket, options.onSynchronized)
+      attempt = 0
+      await connection.closed
+    } catch {
+      attempt += 1
+    }
+    if (!options.signal?.aborted) await sleep(reconnectDelay(attempt, random))
   }
+}
+
+export function reconnectDelay(attempt: number, random: () => number = Math.random): number {
+  const cappedAttempt = Math.max(0, Math.min(attempt, 6))
+  const base = Math.min(30_000, 250 * 2 ** cappedAttempt)
+  return Math.round(base * (0.75 + Math.max(0, Math.min(random(), 1)) * 0.5))
+}
+
+async function openControlConnection(
+  config: RemoteRunnerConfig,
+  stateStore: RunnerStateStore,
+  createSocket: WebSocketFactory,
+  onSynchronized: (() => void) | undefined,
+): Promise<{ closed: Promise<void> }> {
+  const state = await stateStore.load()
+  const socket = createSocket(controlSocketUrl(config.controlPlaneUrl), {
+    authorization: `Bearer ${config.credential}`,
+    'x-ornn-runner-id': config.runnerId,
+  })
+  const instanceId = opaqueInstanceId()
+  let synchronized = false
+  let resolveClosed: () => void = () => {}
+  let resolveSynchronized: () => void = () => {}
+  let rejectSynchronized: (error: Error) => void = () => {}
+  const closed = new Promise<void>((resolve) => { resolveClosed = resolve })
+  const synchronizedPromise = new Promise<void>((resolve, reject) => {
+    resolveSynchronized = resolve
+    rejectSynchronized = reject
+  })
+
+  socket.addEventListener('open', () => {
+    socket.send(JSON.stringify(envelope('runner.synchronize', {
+      runnerId: config.runnerId,
+      instanceId,
+      profile: config.profile,
+      activeLeases: state.activeLeases,
+      commandJournal: state.commandJournal,
+    })))
+  })
+  socket.addEventListener('message', (event) => {
+    void handleControlMessage(event.data, { config, socket, state, stateStore, markSynchronized: async () => {
+      synchronized = true
+      await stateStore.markSynchronized()
+      onSynchronized?.()
+      resolveSynchronized()
+    } }).catch((error) => {
+      socket.send(JSON.stringify(envelope('runner.report', {
+        runnerId: config.runnerId,
+        fault: { code: error instanceof Error ? 'runner.control_message_failed' : 'runner.unknown_failure' },
+      })))
+      socket.close()
+    })
+  })
+  socket.addEventListener('error', () => socket.close())
+  socket.addEventListener('close', () => {
+    if (!synchronized) rejectSynchronized(new Error('Runner control connection closed before synchronization'))
+    resolveClosed()
+  })
+
+  await synchronizedPromise
+  return { closed }
+}
+
+async function handleControlMessage(
+  raw: unknown,
+  context: {
+    config: RemoteRunnerConfig
+    socket: ControlSocket
+    state: RunnerControlState
+    stateStore: RunnerStateStore
+    markSynchronized: () => Promise<void>
+  },
+): Promise<void> {
+  const parsed = parseRunnerEnvelope(parseJson(raw))
+  if (!parsed.ok) throw new Error(`Control protocol rejected: ${parsed.code}`)
+  if (parsed.value.type === 'protocol.unsupported') throw new Error('Control plane rejected the Runner protocol major')
+  if (parsed.value.type === 'runner.synchronized') {
+    const activeLeases = Array.isArray(parsed.value.payload.activeLeases) ? parsed.value.payload.activeLeases : []
+    const acceptedJobs = new Set(activeLeases.filter((lease) => lease && typeof lease === 'object' && (lease as { accepted?: unknown }).accepted === true)
+      .map((lease) => (lease as { jobId?: unknown }).jobId).filter((jobId): jobId is string => typeof jobId === 'string'))
+    context.state.activeLeases = context.state.activeLeases.filter((lease) => acceptedJobs.has(lease.jobId))
+    const commands = Array.isArray(parsed.value.payload.pendingCommands) ? parsed.value.payload.pendingCommands : []
+    for (const command of commands) {
+      if (!command || typeof command !== 'object') continue
+      const { commandId } = command as { commandId?: unknown }
+      if (typeof commandId !== 'string' || context.state.commandJournal.some((entry) => entry.commandId === commandId)) continue
+      context.state.commandJournal.push({ commandId, state: 'accepted' })
+      context.socket.send(JSON.stringify(envelope('runner.command.acknowledged', {
+        runnerId: context.config.runnerId, commandId, state: 'accepted',
+      })))
+    }
+    await context.stateStore.save(context.state)
+    await context.markSynchronized()
+    return
+  }
+  if (parsed.value.type === 'runner.lease') {
+    const lease = parsed.value.payload as LeaseGrant
+    if (!isLeaseGrant(lease)) throw new Error('Control plane sent an invalid lease')
+    if (!context.state.activeLeases.some((active) => active.jobId === lease.jobId)) {
+      context.state.activeLeases.push({ jobId: lease.jobId, leaseToken: lease.leaseToken })
+      await context.stateStore.save(context.state)
+    }
+    context.socket.send(JSON.stringify(envelope('lease.accept', leaseScope(context.config, lease))))
+    context.socket.send(JSON.stringify(envelope('lease.heartbeat', leaseScope(context.config, lease))))
+    context.socket.send(JSON.stringify(envelope('lease.result', {
+      ...leaseScope(context.config, lease),
+      artifact: fixtureArtifact(),
+    })))
+  }
+}
+
+function fileRunnerStateStore(
+  statePath = process.env.ORNN_RUNNER_STATE_PATH ?? '/var/lib/ornn-runner/control-state.json',
+  readyPath = process.env.ORNN_RUNNER_READY_PATH ?? '/var/lib/ornn-runner/control-connection.ready',
+): RunnerStateStore {
+  return {
+    async load() {
+      const text = await Bun.file(statePath).text().catch(() => '')
+      if (!text) return { activeLeases: [], commandJournal: [] }
+      try {
+        const value = JSON.parse(text)
+        return isRunnerControlState(value) ? value : { activeLeases: [], commandJournal: [] }
+      } catch {
+        return { activeLeases: [], commandJournal: [] }
+      }
+    },
+    async save(state) {
+      await Bun.write(statePath, JSON.stringify(state))
+    },
+    async markSynchronized() {
+      await Bun.write(readyPath, `${new Date().toISOString()}\n`)
+    },
+    async clearSynchronization() {
+      await unlink(readyPath).catch((error: unknown) => {
+        if ((error as { code?: unknown }).code !== 'ENOENT') throw error
+      })
+    },
+  }
+}
+
+function bunWebSocket(url: string, headers: Record<string, string>): ControlSocket {
+  return new WebSocket(url, { headers } as unknown as string[]) as unknown as ControlSocket
+}
+
+function controlSocketUrl(controlPlaneUrl: string): string {
+  const url = new URL('/api/v1/runner/connect', controlPlaneUrl)
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  return url.toString()
+}
+
+function reconnectStateEntry(value: unknown): value is RunnerCommandJournalEntry {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    && typeof (value as { commandId?: unknown }).commandId === 'string'
+    && ['accepted', 'completed', 'failed'].includes(String((value as { state?: unknown }).state))
+}
+
+function isRunnerControlState(value: unknown): value is RunnerControlState {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const state = value as { activeLeases?: unknown; commandJournal?: unknown }
+  return Array.isArray(state.activeLeases) && state.activeLeases.every((lease) =>
+    typeof lease === 'object' && lease !== null && typeof (lease as { jobId?: unknown }).jobId === 'string' && typeof (lease as { leaseToken?: unknown }).leaseToken === 'string',
+  ) && Array.isArray(state.commandJournal) && state.commandJournal.every(reconnectStateEntry)
+}
+
+function isLeaseGrant(value: unknown): value is LeaseGrant {
+  return typeof value === 'object' && value !== null && typeof (value as { jobId?: unknown }).jobId === 'string'
+    && typeof (value as { leaseToken?: unknown }).leaseToken === 'string'
+}
+
+function parseJson(value: unknown): unknown {
+  if (typeof value !== 'string') throw new Error('Control plane sent a non-text message')
+  return JSON.parse(value)
 }
 
 function leaseScope(config: RemoteRunnerConfig, lease: LeaseGrant) {
   return { runnerId: config.runnerId, jobId: lease.jobId, leaseToken: lease.leaseToken }
+}
+
+function fixtureArtifact() {
+  return {
+    schemaVersion: 1 as const,
+    kind: 'plan' as const,
+    summary: 'Fixture analysis complete',
+    details: 'The deterministic Remote Runner fixture completed through the production control connection.',
+  }
+}
+
+function opaqueInstanceId(): string {
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  return `instance_v1_${Buffer.from(bytes).toString('base64url')}`
 }
 
 function runnerCapacity(value: string | undefined): number {
@@ -83,24 +296,6 @@ function runnerCapacity(value: string | undefined): number {
   return capacity
 }
 
-function call(config: RemoteRunnerConfig, operation: 'poll' | 'heartbeat' | 'result' | 'report', body: unknown, request: HttpRequest) {
-  return request(new URL(`/api/v1/runner/${operation}`, config.controlPlaneUrl), {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${config.credential}`,
-      'content-type': 'application/json',
-      'x-ornn-runner-id': config.runnerId,
-    },
-    body: JSON.stringify(body),
-  })
-}
-
-async function accepted(response: Promise<Response>) {
-  const value = await response
-  const body = await value.json() as RunnerResponse
-  if (!value.ok || body.type !== 'lease.accepted') throw new Error(`Lease rejected: ${body.type}`)
-}
-
 if (import.meta.main) {
-  await executeFixtureLease(await remoteRunnerConfigFromEnvironment())
+  await runRemoteRunner(await remoteRunnerConfigFromEnvironment())
 }

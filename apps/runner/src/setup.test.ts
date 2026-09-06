@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { createControlPlane, createInMemoryInvocationStore } from '../../../src/control-plane'
-import { enrollRemoteRunner } from './setup'
+import { enrollRemoteRunner, startDebugRunnerUntilSynchronized } from './setup'
 
 test('the setup flow preflights before persisting a credential and finalizes with only its digest', async () => {
   const requests: Array<{ path: string; body: unknown }> = []
@@ -84,6 +84,18 @@ test('the Runner setup client enrolls a separately created identity through the 
   expect((await app.fetch(new Request('https://control.test/api/v1/runner/setup/preflight', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ setupToken }),
   }))).status).toBe(401)
+})
+
+test('debug setup reports success only after the started Runner has synchronized', async () => {
+  let starts = 0
+  let checks = 0
+  await startDebugRunnerUntilSynchronized({
+    async start() { starts += 1 },
+    async synchronized() { checks += 1; return checks === 3 },
+    async sleep() {},
+  })
+  expect(starts).toBe(1)
+  expect(checks).toBe(3)
 })
 
 async function sha256Hex(value: string): Promise<string> {
