@@ -1,4 +1,4 @@
-# Containerized Remote Runner with Docker sandboxes
+# Local Runner Test Harness with Docker sandboxes
 
 Status: research complete
 
@@ -6,9 +6,9 @@ Last verified: 2026-09-06
 
 Issue: [#30](https://github.com/bjesuiter/ornn-forge/issues/30)
 
-## Decision
+## Scope and decision
 
-Run a disposable **local debugging** Remote Runner as a digest-pinned
+Use a disposable **local test/debug Runner** as a digest-pinned
 Debian-and-Bun application container. It runs on the developer's selected
 local Docker Engine—OrbStack on macOS or Docker Engine on Linux (`srv04`)—and
 creates each Job sandbox as a sibling container on that Engine. The Runner is
@@ -16,7 +16,14 @@ packaged in a container; its Job sandboxes are not nested inside it. This lets
 the developer edit the Runner source on the same machine without installing
 Bun or the Runner on that host.
 
-This is the least-complex viable design for the existing Docker
+This is a development integration-test harness, not a production deployment
+decision. Its purpose is to exercise the Runner, its Docker adapter, and
+crash/cleanup behavior against a real local Engine while keeping the host free
+of Runner dependencies. It does not prescribe how a production Remote Runner
+is installed or operated, including on `homeserv1`.
+
+For this local harness, host-Engine socket passthrough is the least-complex
+viable model for the existing Docker
 `SandboxDriver` contract. It lets a restarted Runner discover, inspect, stop,
 remove, and verify the exact local-Engine resources that it created. It does
 **not** make the Runner a lower-trust workload: Docker documents that members
@@ -48,7 +55,7 @@ security boundary is the same trusted-Runner boundary already assumed by ADR
 does not authorize deploying this image or its local credential arrangement to
 that host.
 
-## Deployment contract
+## Test-harness contract
 
 ### Image and runtime
 
@@ -114,17 +121,16 @@ example) `/workspace/ornn-forge` is not a path that may be forwarded to the
 Engine for a child sandbox. Use the Docker archive/file API or an anonymous
 workspace volume for every Job checkout. [Docker bind mounts](https://docs.docker.com/engine/storage/bind-mounts/)
 
-### Credentials and state
+### Test state and credentials
 
-ADR 0004 remains the credential-boundary decision. Keep a local development
-Runner's encrypted mutable OAuth record in the Runner-only named volume. Its
-store key and Runner transport credential come from two local, untracked,
-read-only files mounted only into the Runner at launch. Do not pass either
-through an environment variable, command line, image, or Job sandbox. Use a
-separate development Runner registration and credential; this temporary local
-launcher is not a replacement for the ADR's systemd-encrypted-credential
-deployment on `homeserv1`. This preserves the boundary: the control plane and
-Job sandboxes never receive reusable credentials.
+Use a separate, untracked development Runner registration and transport
+credential, mounted read-only only into the Runner. The harness may use a
+fixture executor and does not need a model OAuth credential for its core
+Docker-adapter tests. If a local model-authentication experiment is needed,
+its encrypted mutable OAuth record belongs in the Runner-only named volume;
+it is never passed through an environment variable, command line, image, or
+Job sandbox. This test harness neither replaces nor changes ADR 0004's
+production credential decision.
 
 Do not use image build arguments or environment variables for secrets: Docker
 documents that they persist in the final image or its metadata. [Docker build
@@ -138,8 +144,7 @@ them explicitly. [Volume lifecycle](https://docs.docker.com/engine/storage/volum
 
 ### Job sandbox policy and cleanup
 
-The selected deployment implements, rather than changes, ADR 0003 and ADR
-0005:
+The test harness must preserve, rather than change, ADR 0003 and ADR 0005:
 
 1. Before create, persist the capacity reservation and a `provisioning` ledger
    record. Create a deterministic container name and immutable ownership,
@@ -271,8 +276,8 @@ prove non-disclosure.
 
 ## ADR impact
 
-No change to the decisions in ADR 0003 or ADR 0005 is required: the selected
-deployment preserves their independent cleanup state, deterministic identity,
+No change to the decisions in ADR 0003 or ADR 0005 is required: the test
+harness preserves their independent cleanup state, deterministic identity,
 discovery, whole-container termination, and verified deletion rules.
 
 ADR 0004's trust boundary remains valid: the local development store key and
