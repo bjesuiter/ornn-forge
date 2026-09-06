@@ -2,11 +2,11 @@ node_modules/
 dist/
 .output/
 .wrangler/
-.dev.vars
 .env
 .env.*
 !.env.example
 !.env.schema
+!.env.development
 !.env.ops
 .bun/
 .tmp/

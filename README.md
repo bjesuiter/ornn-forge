@@ -8,6 +8,29 @@ pending Analyze Job in D1, then exposes that Job to the single authenticated ope
 The GitHub App must subscribe to both **Issue comment** and **Issues** events,
 and its installation must grant **Issues: Read and write** repository access.
 
+## Local Dashboard login
+
+The development profile keeps the Dashboard's OAuth secrets in macOS Keychain,
+with portable resolver references committed in [`.env.development`](.env.development).
+Configure a second callback URL on the GitHub App:
+
+```
+http://localhost:3000/api/auth/callback/github
+```
+
+Then set the two local secrets interactively; neither command prints the value:
+
+```sh
+bunx varlock keychain set BETTER_AUTH_SECRET --project ornn-forge --profile development --write-to .env.development
+bunx varlock keychain set GITHUB_CLIENT_SECRET --project ornn-forge --profile development --write-to .env.development
+```
+
+Generate a unique value for `BETTER_AUTH_SECRET` with `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`, then paste it into the first prompt. Paste the second GitHub App client secret into the second prompt. Start the local Dashboard with:
+
+```sh
+bun run dev
+```
+
 ## D1 setup and deployed smoke check
 
 Provision a dedicated D1 database named `ornn-forge` in the intended Cloudflare

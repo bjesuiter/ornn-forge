@@ -4,7 +4,7 @@
   "type": "module",
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "dev": "vite dev",
+    "dev": "DEV_ENV=development CLOUDFLARE_INCLUDE_PROCESS_ENV=true bunx varlock run -- vite dev",
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
