@@ -110,6 +110,8 @@ Plane. It stores the raw credential in macOS Keychain through Varlock and writes
 the public Runner ID to [`.env.runner-debug`](.env.runner-debug); neither is
 written to shell history. The authenticated Runner startup and control-connection
 sync are tracked in [#49](https://github.com/bjesuiter/ornn-forge/issues/49).
+The deployed control-plane and Runner setup handshake can be smoke-tested with
+`bun run test:smoke:runner-setup` after loading the `ORNN_SMOKE_*` environment.
 
 The existing one-shot Fixture Runner can still be run with a separately
 configured fixture identity:

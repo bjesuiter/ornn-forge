@@ -15,7 +15,8 @@
     "cf-typegen": "wrangler types",
     "test": "bun test",
     "runner:fixture": "bun run --filter @ornn-forge/runner fixture",
-    "test:smoke:d1": "bun run scripts/smoke-deployed-d1.ts"
+    "test:smoke:d1": "bun run scripts/smoke-deployed-d1.ts",
+    "test:smoke:runner-setup": "bun run scripts/smoke-deployed-runner-setup.ts"
   },
   "dependencies": {
     "@ornn-forge/domain": "workspace:*",
