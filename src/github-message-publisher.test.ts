@@ -34,7 +34,7 @@ test('GitHub message publisher creates, updates, and finds only the rendered eff
         new TextEncoder().encode(`${header}.${payload}`),
       )).toBeTrue()
       expect(JSON.parse(String(init?.body))).toEqual({ repository_ids: [1_296_836_371], permissions: { issues: 'write' } })
-      return Response.json({ token: 'installation-token' }, { status: 201 })
+      return Response.json({ token: 'installation-token', expires_at: '2026-09-07T13:00:00.000Z' }, { status: 201 })
     }
     if (String(input).includes('/comments?')) return Response.json([{ id: 17, body }], { headers: { link: '' } })
     if (init?.method === 'POST') return Response.json({ id: 18 }, { status: 201 })

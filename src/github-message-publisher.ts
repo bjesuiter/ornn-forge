@@ -1,6 +1,6 @@
 import type { OrnnMessagePublisher } from './control-plane'
 
-type GitHubAppCredentials = {
+export type GitHubAppCredentials = {
   appId: string
   privateKey: string
   installationId: string
@@ -11,10 +11,10 @@ export function createGitHubMessagePublisher(
   credentials: GitHubAppCredentials,
   request: typeof fetch = fetch,
 ): OrnnMessagePublisher {
-  let installationToken: Promise<string> | undefined
+  let installationToken: Promise<{ token: string; expiresAt: string }> | undefined
   const headers = async () => {
-    installationToken ??= createInstallationToken(credentials, request)
-    return githubHeaders(await installationToken)
+    installationToken ??= createGitHubInstallationToken(credentials, { issues: 'write' }, request)
+    return githubHeaders((await installationToken).token)
   }
 
   return {
@@ -49,7 +49,11 @@ export function createGitHubMessagePublisher(
   }
 }
 
-async function createInstallationToken(credentials: GitHubAppCredentials, request: typeof fetch): Promise<string> {
+export async function createGitHubInstallationToken(
+  credentials: GitHubAppCredentials,
+  permissions: Record<string, 'read' | 'write'>,
+  request: typeof fetch = fetch,
+): Promise<{ token: string; expiresAt: string }> {
   const repositoryId = Number(credentials.repositoryId)
   if (!Number.isSafeInteger(repositoryId) || repositoryId <= 0) {
     throw new Error('GITHUB_REPOSITORY_ID must be a positive integer')
@@ -69,17 +73,17 @@ async function createInstallationToken(credentials: GitHubAppCredentials, reques
       },
       body: JSON.stringify({
         repository_ids: [repositoryId],
-        permissions: { issues: 'write' },
+        permissions,
       }),
     },
   )
   if (!response.ok) throw new Error(`GitHub installation token creation failed: ${response.status}`)
 
-  const body = await response.json() as { token?: unknown }
-  if (typeof body.token !== 'string' || body.token.length === 0) {
+  const body = await response.json() as { token?: unknown; expires_at?: unknown }
+  if (typeof body.token !== 'string' || body.token.length === 0 || typeof body.expires_at !== 'string' || Number.isNaN(Date.parse(body.expires_at))) {
     throw new Error('GitHub installation token creation returned no token')
   }
-  return body.token
+  return { token: body.token, expiresAt: body.expires_at }
 }
 
 async function signAppJwt(appId: string, privateKey: string): Promise<string> {
