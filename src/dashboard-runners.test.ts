@@ -5,6 +5,9 @@ test('the dashboard keeps runner presence, pause, faults, capacity, and work as 
   const runners = dashboardRunnersFromRows([
     {
       runner_id: 'runner_homeserv1',
+      enrollment_state: 'enrolled',
+      readiness_state: 'ready',
+      desired_capacity: 2,
       last_seen_at: '2026-09-06T12:00:00.000Z',
       paused: 1,
       fault_code: 'runner.operation_failed',
@@ -43,6 +46,9 @@ test('the dashboard keeps runner presence, pause, faults, capacity, and work as 
 
   expect(runners).toEqual([{
     id: 'runner_homeserv1',
+    enrollment: 'enrolled',
+    ready: true,
+    desiredCapacity: 2,
     online: true,
     lastSeenAt: '2026-09-06T12:00:00.000Z',
     paused: true,

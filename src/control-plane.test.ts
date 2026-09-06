@@ -109,6 +109,59 @@ test('admits one signed delivery and lets the operator inspect its pending Analy
   expect(await resolved.json()).toMatchObject({ job: { id: accepted.jobId }, message: { id: inspection.message.id } })
 })
 
+test('issues independent, short-lived, one-time Setup tokens for Remote Runner enrollment', async () => {
+  let now = new Date('2026-09-06T12:00:00.000Z')
+  const app = createControlPlane({
+    store: createInMemoryInvocationStore(),
+    githubWebhookSecret: webhookSecret,
+    githubInstallationId: '42',
+    githubRepositoryId: '99',
+    operatorBearerSecret: operatorSecret,
+    now: () => now,
+  })
+  const operatorRequest = (path: string, body: unknown) => app.fetch(new Request(`https://ornn.example${path}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${operatorSecret}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  }))
+  const setupRequest = (path: string, body: unknown) => app.fetch(new Request(`https://ornn.example${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  }))
+
+  const firstCreated = await operatorRequest('/api/v1/runners', { capacity: 2 })
+  const secondCreated = await operatorRequest('/api/v1/runners', { capacity: 3 })
+  expect(firstCreated.status).toBe(201)
+  expect(secondCreated.status).toBe(201)
+  const first = await firstCreated.json() as { runner: { id: string; desiredCapacity: number; enrollment: string; ready: boolean }; setupToken: string }
+  const second = await secondCreated.json() as { runner: { id: string; desiredCapacity: number }; setupToken: string }
+  expect(first).toMatchObject({ runner: { desiredCapacity: 2, enrollment: 'awaiting_setup', ready: false } })
+  expect(first.runner.id).toMatch(/^runner_v1_/)
+  expect(first.setupToken).toMatch(/^setup_v1_/)
+  expect(second.runner).toMatchObject({ desiredCapacity: 3 })
+  expect(second.runner.id).toMatch(/^runner_v1_/)
+  expect(second.runner.id).not.toBe(first.runner.id)
+
+  expect((await setupRequest('/api/v1/runner/setup/preflight', { setupToken: first.setupToken })).status).toBe(200)
+  const regenerated = await operatorRequest(`/api/v1/runners/${first.runner.id}/setup-token`, {})
+  expect(regenerated.status).toBe(201)
+  const replacement = await regenerated.json() as { setupToken: string }
+  expect(replacement.setupToken).not.toBe(first.setupToken)
+  expect((await setupRequest('/api/v1/runner/setup/preflight', { setupToken: first.setupToken })).status).toBe(401)
+
+  expect((await setupRequest('/api/v1/runner/setup/enroll', {
+    setupToken: second.setupToken,
+    credentialDigest: 'a'.repeat(64),
+  })).status).toBe(201)
+  expect((await setupRequest('/api/v1/runner/setup/preflight', { setupToken: second.setupToken })).status).toBe(401)
+  expect((await setupRequest('/api/v1/runner/setup/enroll', {
+    setupToken: second.setupToken,
+    credentialDigest: 'b'.repeat(64),
+  })).status).toBe(401)
+
+  now = new Date('2026-09-06T12:16:00.000Z')
+  expect((await setupRequest('/api/v1/runner/setup/preflight', { setupToken: replacement.setupToken })).status).toBe(401)
+})
+
 test('leases one pending Job to its authenticated Runner and records its fixture Analysis artifact', async () => {
   const calls: string[] = []
   const app = createControlPlane({

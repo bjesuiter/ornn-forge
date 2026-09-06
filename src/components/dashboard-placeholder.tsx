@@ -145,6 +145,12 @@ export function Dashboard({
                           <span aria-hidden="true" />
                           {runner.online ? 'Online' : 'Offline'}
                         </p>
+                        <span className={`fd-runner-enrollment is-${runner.enrollment}`}>
+                          {runner.enrollment === 'awaiting_setup' ? 'Einrichtung ausstehend' : 'Eingeschrieben'}
+                        </span>
+                        <span className={`fd-runner-readiness ${runner.ready ? 'is-ready' : 'is-not-ready'}`}>
+                          {runner.ready ? 'Bereit' : 'Nicht bereit'}
+                        </span>
                         {runner.paused && <span className="fd-runner-pause">Pausiert</span>}
                         {runner.fault && <span className="fd-runner-fault">Fehler</span>}
                       </div>
@@ -177,7 +183,7 @@ export function Dashboard({
                     </section>
                     <section className="fd-runner-detail">
                       <span>Kapazität</span>
-                      <strong>{runner.reservations} von {runner.profile?.capacity ?? 1} reserviert</strong>
+                      <strong>{runner.reservations} von {runner.desiredCapacity} reserviert</strong>
                       <small>Reservierungen bleiben bis zur verifizierten Sandbox-Bereinigung bestehen.</small>
                     </section>
                     {runner.fault && (

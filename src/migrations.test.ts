@@ -7,6 +7,7 @@ const runnerMigration = readFileSync(new URL('../migrations/0002_fixture_runner.
 const runnerPresenceMigration = readFileSync(new URL('../migrations/0005_record_runner_presence.sql', import.meta.url), 'utf8')
 const runnerPausesMigration = readFileSync(new URL('../migrations/0006_pause_runners.sql', import.meta.url), 'utf8')
 const runnerDiagnosticsMigration = readFileSync(new URL('../migrations/0007_record_runner_diagnostics.sql', import.meta.url), 'utf8')
+const remoteRunnersMigration = readFileSync(new URL('../migrations/0008_create_remote_runner_identities.sql', import.meta.url), 'utf8')
 
 test('the admission migration creates immutable provenance and append-only events', () => {
   const database = new Database(':memory:')
@@ -56,6 +57,16 @@ test('the fixture Runner migration stores only credential and lease digests', ()
     'runner_homeserv1', 'v1.2.3', 'linux', 'arm64', 'Bun 1.4.0', 'docker', 2, '2026-09-05T00:00:15.000Z'
   )`)
   database.run("INSERT INTO runner_error_states VALUES ('runner_homeserv1', 'runner.operation_failed', '2026-09-05T00:00:20.000Z')")
+  database.exec(remoteRunnersMigration)
   expect(database.query('SELECT capacity FROM runner_profiles').get()).toEqual({ capacity: 2 })
   expect(database.query('SELECT code FROM runner_error_states').get()).toEqual({ code: 'runner.operation_failed' })
+  expect(database.query('SELECT desired_capacity, enrollment_state FROM remote_runners').get())
+    .toEqual({ desired_capacity: 2, enrollment_state: 'enrolled' })
+
+  database.run(`INSERT INTO runner_setup_tokens VALUES (
+    'st_v1_a', 'runner_homeserv1', 'setup-token-digest-only', '2026-09-05T00:15:00.000Z',
+    '2026-09-05T00:00:00.000Z', NULL, NULL, NULL
+  )`)
+  expect(database.query('SELECT token_digest FROM runner_setup_tokens').get())
+    .toEqual({ token_digest: 'setup-token-digest-only' })
 })

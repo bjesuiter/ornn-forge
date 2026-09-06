@@ -1,5 +1,8 @@
 export type DashboardRunner = {
   id: string
+  enrollment: 'awaiting_setup' | 'enrolled'
+  ready: boolean
+  desiredCapacity: number
   online: boolean
   lastSeenAt?: string
   paused: boolean
@@ -43,6 +46,9 @@ const onlineWindowMs = 20_000
 
 type DashboardRunnerRow = {
   runner_id: string
+  enrollment_state: 'awaiting_setup' | 'enrolled'
+  readiness_state: 'not_ready' | 'ready'
+  desired_capacity: number
   last_seen_at: string | null
   paused: number
   fault_code: string | null
@@ -84,22 +90,23 @@ export async function listDashboardRunners(
 ): Promise<DashboardRunner[]> {
   const onlineSince = new Date(now.getTime() - onlineWindowMs).toISOString()
   const [runners, activeJobs, completedJobs] = await Promise.all([
-    database.prepare(`SELECT c.runner_id, p.last_seen_at, COALESCE(paused.paused, 0) AS paused,
+    database.prepare(`SELECT runner.runner_id, runner.enrollment_state, runner.readiness_state, runner.desired_capacity,
+      p.last_seen_at, COALESCE(paused.paused, 0) AS paused,
       fault.code AS fault_code, fault.occurred_at AS fault_occurred_at,
       profile.release, profile.platform, profile.architecture, profile.runtime, profile.executor,
       COALESCE(profile.capacity, 1) AS capacity, COALESCE(reservation.count, 0) AS reservations
-      FROM runner_credentials c
-      LEFT JOIN runner_presence p ON p.runner_id = c.runner_id
-      LEFT JOIN runner_pauses paused ON paused.runner_id = c.runner_id
-      LEFT JOIN runner_error_states fault ON fault.runner_id = c.runner_id
-      LEFT JOIN runner_profiles profile ON profile.runner_id = c.runner_id
+      FROM remote_runners runner
+      LEFT JOIN runner_presence p ON p.runner_id = runner.runner_id
+      LEFT JOIN runner_pauses paused ON paused.runner_id = runner.runner_id
+      LEFT JOIN runner_error_states fault ON fault.runner_id = runner.runner_id
+      LEFT JOIN runner_profiles profile ON profile.runner_id = runner.runner_id
       LEFT JOIN (
         SELECT l.runner_id, COUNT(*) AS count FROM runner_leases l
         JOIN jobs j ON j.job_id = l.job_id
         WHERE j.cleanup_status IS NOT 'verified'
         GROUP BY l.runner_id
-      ) reservation ON reservation.runner_id = c.runner_id
-      ORDER BY c.runner_id ASC`).all<DashboardRunnerRow>(),
+      ) reservation ON reservation.runner_id = runner.runner_id
+      ORDER BY runner.runner_id ASC`).all<DashboardRunnerRow>(),
     database.prepare(`SELECT l.runner_id, l.job_id, i.github_repository_full_name, i.github_issue_number,
       i.github_issue_title, l.generation, l.created_at, l.last_heartbeat_at, l.expires_at
       FROM runner_leases l
@@ -134,6 +141,9 @@ export function dashboardRunnersFromRows(
     const recentJobs = completedJobs.get(runner.runner_id) ?? []
     return {
       id: runner.runner_id,
+      enrollment: runner.enrollment_state,
+      ready: runner.readiness_state === 'ready',
+      desiredCapacity: runner.desired_capacity,
       online: runner.last_seen_at !== null && runner.last_seen_at >= onlineSince,
       lastSeenAt: runner.last_seen_at ?? undefined,
       paused: runner.paused === 1,

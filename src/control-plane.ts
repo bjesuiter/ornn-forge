@@ -19,6 +19,7 @@ const ANALYZE_FLOW_ID = 'analyze'
 const ANALYZE_FLOW_VERSION_ID = 'fv_v1_nTrDKcC7adfgDeQBd41eiA'
 const ADMISSION_POLICY_VERSION_ID = 'pv_v1_bCpHOE6Md2lHYS8NiKZq5w'
 const MAX_SOURCE_FIELD_LENGTH = 16_384
+const SETUP_TOKEN_LIFETIME_MS = 15 * 60_000
 
 export type ControlPlaneOptions = {
   store: InvocationStore
@@ -30,6 +31,7 @@ export type ControlPlaneOptions = {
   runnerCredentialId?: string
   runnerCredentialSecret?: string
   messagePublisher?: OrnnMessagePublisher
+  now?: () => Date
 }
 
 export interface OrnnMessagePublisher {
@@ -98,6 +100,10 @@ export interface InvocationStore {
   admit(delivery: DeliveryInput): Promise<Admission | { conflict: true }>
   inspectJob(jobId: string): Promise<JobInspection | undefined>
   inspectMessage?(ornnMessageId: string): Promise<JobInspection | undefined>
+  createRemoteRunner?(input: RemoteRunnerCreation): Promise<RemoteRunner>
+  regenerateSetupToken?(input: NewSetupToken): Promise<RemoteRunner | undefined>
+  preflightSetupToken?(input: SetupTokenLookup): Promise<RemoteRunner | undefined>
+  enrollRemoteRunner?(input: SetupTokenEnrollment): Promise<RemoteRunner | undefined>
   authenticateRunner?(runnerId: string, credentialDigest: string): Promise<boolean>
   updateRunnerProfile?(runnerId: string, profile: RunnerProfile): Promise<void>
   pollRunner?(runnerId: string): Promise<LeaseGrant | undefined>
@@ -108,6 +114,19 @@ export interface InvocationStore {
   recordRunnerFault?(runnerId: string, fault: RunnerFault): Promise<void>
   recordMessagePublication?(jobId: string, update: { githubCommentId?: string; attempt: OrnnMessageState['latestAttempt'] }): Promise<void>
 }
+
+export type RemoteRunner = {
+  id: string
+  desiredCapacity: number
+  enrollment: 'awaiting_setup' | 'enrolled'
+  ready: boolean
+}
+
+type RemoteRunnerCreation = { id: string; desiredCapacity: number } & SetupTokenRecord
+type NewSetupToken = SetupTokenRecord & { runnerId: string }
+type SetupTokenRecord = { tokenId: string; tokenDigest: string; expiresAt: string; createdAt: string }
+type SetupTokenLookup = { tokenDigest: string; now: string }
+type SetupTokenEnrollment = SetupTokenLookup & { credentialDigest: string }
 
 type LeaseInput = { runnerId: string; jobId: string; leaseToken: string }
 
@@ -129,6 +148,62 @@ export function createControlPlane(options: ControlPlaneOptions) {
       const url = new URL(request.url)
       if (request.method === 'POST' && url.pathname === '/api/v1/github/webhook') {
         return admitGitHubDelivery(request, options)
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/v1/runners') {
+        if (!(await isAuthenticatedOperator(request, operatorCredential))) {
+          return json({ apiVersion: API_VERSION, error: { code: 'operator_unauthorized' } }, 401)
+        }
+        const input = await requestJson(request)
+        if (!isRemoteRunnerCreation(input) || !options.store.createRemoteRunner) {
+          return json({ apiVersion: API_VERSION, error: { code: 'invalid_runner' } }, 422)
+        }
+        const issuedToken = await issueSetupToken(options)
+        const runner = await options.store.createRemoteRunner({
+          id: opaqueId('runner'),
+          desiredCapacity: input.capacity,
+          ...issuedToken.record,
+        })
+        return json({ apiVersion: API_VERSION, runner, setupToken: issuedToken.value }, 201, { 'Cache-Control': 'no-store' })
+      }
+
+      const setupTokenMatch = /^\/api\/v1\/runners\/([^/]+)\/setup-token$/.exec(url.pathname)
+      if (request.method === 'POST' && setupTokenMatch) {
+        if (!(await isAuthenticatedOperator(request, operatorCredential))) {
+          return json({ apiVersion: API_VERSION, error: { code: 'operator_unauthorized' } }, 401)
+        }
+        if (!options.store.regenerateSetupToken) return json({ apiVersion: API_VERSION, error: { code: 'runner_not_found' } }, 404)
+        const issuedToken = await issueSetupToken(options)
+        const runner = await options.store.regenerateSetupToken({
+          runnerId: decodeURIComponent(setupTokenMatch[1]),
+          ...issuedToken.record,
+        })
+        if (!runner) return json({ apiVersion: API_VERSION, error: { code: 'runner_not_found' } }, 404)
+        return json({ apiVersion: API_VERSION, runner, setupToken: issuedToken.value }, 201, { 'Cache-Control': 'no-store' })
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/v1/runner/setup/preflight') {
+        const input = await requestJson(request)
+        if (!isSetupTokenRequest(input) || !options.store.preflightSetupToken) {
+          return json({ apiVersion: API_VERSION, error: { code: 'setup_token_invalid' } }, 401)
+        }
+        const runner = await options.store.preflightSetupToken({ tokenDigest: await sha256(input.setupToken), now: currentTime(options) })
+        return runner
+          ? json({ apiVersion: API_VERSION, runner }, 200, { 'Cache-Control': 'no-store' })
+          : json({ apiVersion: API_VERSION, error: { code: 'setup_token_invalid' } }, 401)
+      }
+
+      if (request.method === 'POST' && url.pathname === '/api/v1/runner/setup/enroll') {
+        const input = await requestJson(request)
+        if (!isEnrollmentRequest(input) || !options.store.enrollRemoteRunner) {
+          return json({ apiVersion: API_VERSION, error: { code: 'setup_token_invalid' } }, 401)
+        }
+        const runner = await options.store.enrollRemoteRunner({
+          tokenDigest: await sha256(input.setupToken), credentialDigest: input.credentialDigest, now: currentTime(options),
+        })
+        return runner
+          ? json({ apiVersion: API_VERSION, runner }, 201, { 'Cache-Control': 'no-store' })
+          : json({ apiVersion: API_VERSION, error: { code: 'setup_token_invalid' } }, 401)
       }
 
       const runnerMatch = /^\/api\/v1\/runner\/(poll|heartbeat|result|report)$/.exec(url.pathname)
@@ -458,6 +533,47 @@ function containsOrnnMention(value: string): boolean {
   return /(?:^|[^\w-])@?ornn-forge\b/i.test(value)
 }
 
+async function requestJson(request: Request): Promise<unknown> {
+  try {
+    return await request.json()
+  } catch {
+    return undefined
+  }
+}
+
+function isRemoteRunnerCreation(value: unknown): value is { capacity: number } {
+  return isObject(value) && typeof value.capacity === 'number' && Number.isInteger(value.capacity)
+    && value.capacity >= 1 && value.capacity <= 32
+}
+
+function isSetupTokenRequest(value: unknown): value is { setupToken: string } {
+  return isObject(value) && typeof value.setupToken === 'string' && /^setup_v1_[A-Za-z0-9_-]{22}$/.test(value.setupToken)
+}
+
+function isEnrollmentRequest(value: unknown): value is { setupToken: string; credentialDigest: string } {
+  return isObject(value) && typeof value.setupToken === 'string' && /^setup_v1_[A-Za-z0-9_-]{22}$/.test(value.setupToken)
+    && typeof value.credentialDigest === 'string'
+    && /^[0-9a-f]{64}$/i.test(value.credentialDigest)
+}
+
+function currentTime(options: ControlPlaneOptions): string {
+  return (options.now ?? (() => new Date()))().toISOString()
+}
+
+async function issueSetupToken(options: ControlPlaneOptions): Promise<{ value: string; record: SetupTokenRecord }> {
+  const createdAt = currentTime(options)
+  const value = opaqueId('setup')
+  return {
+    value,
+    record: {
+      tokenId: opaqueId('st'),
+      tokenDigest: await sha256(value),
+      createdAt,
+      expiresAt: new Date(new Date(createdAt).getTime() + SETUP_TOKEN_LIFETIME_MS).toISOString(),
+    },
+  }
+}
+
 function asIdentifier(value: unknown): string | undefined {
   if (typeof value !== 'string' && typeof value !== 'number') return undefined
   const text = String(value)
@@ -567,10 +683,13 @@ function bytesToBase64Url(bytes: Uint8Array): string {
 }
 
 type StoredRecord = { delivery: DeliveryInput; inspection: JobInspection; events: EventRecord[]; bodySha256: string }
+type StoredSetupToken = SetupTokenRecord & { runnerId: string; invalidatedAt?: string; consumedAt?: string }
 
 export function createInMemoryInvocationStore(): InvocationStore {
   const recordsByDelivery = new Map<string, StoredRecord>()
   const inspectionsByJob = new Map<string, JobInspection>()
+  const remoteRunners = new Map<string, RemoteRunner>()
+  const setupTokensByDigest = new Map<string, StoredSetupToken>()
   const runnerCredentials = new Map<string, string>()
   const runnerProfiles = new Map<string, RunnerProfile>()
   const pausedRunners = new Set<string>()
@@ -608,6 +727,44 @@ export function createInMemoryInvocationStore(): InvocationStore {
     async inspectMessage(ornnMessageId) {
       return [...inspectionsByJob.values()].find((inspection) => inspection.message?.id === ornnMessageId)
     },
+    async createRemoteRunner(input) {
+      const runner: RemoteRunner = {
+        id: input.id, desiredCapacity: input.desiredCapacity, enrollment: 'awaiting_setup', ready: false,
+      }
+      remoteRunners.set(runner.id, runner)
+      setupTokensByDigest.set(input.tokenDigest, {
+        tokenId: input.tokenId, runnerId: runner.id, tokenDigest: input.tokenDigest,
+        createdAt: input.createdAt, expiresAt: input.expiresAt,
+      })
+      return runner
+    },
+    async regenerateSetupToken(input) {
+      const runner = remoteRunners.get(input.runnerId)
+      if (!runner || runner.enrollment !== 'awaiting_setup') return undefined
+      for (const token of setupTokensByDigest.values()) {
+        if (token.runnerId === runner.id && !token.invalidatedAt && !token.consumedAt) token.invalidatedAt = input.createdAt
+      }
+      setupTokensByDigest.set(input.tokenDigest, {
+        tokenId: input.tokenId, runnerId: runner.id, tokenDigest: input.tokenDigest,
+        createdAt: input.createdAt, expiresAt: input.expiresAt,
+      })
+      return runner
+    },
+    async preflightSetupToken(input) {
+      const token = setupTokensByDigest.get(input.tokenDigest)
+      if (!usableSetupToken(token, input.now)) return undefined
+      return remoteRunners.get(token.runnerId)
+    },
+    async enrollRemoteRunner(input) {
+      const token = setupTokensByDigest.get(input.tokenDigest)
+      if (!usableSetupToken(token, input.now)) return undefined
+      const runner = remoteRunners.get(token.runnerId)
+      if (!runner || runner.enrollment !== 'awaiting_setup' || runnerCredentials.has(runner.id)) return undefined
+      runnerCredentials.set(runner.id, input.credentialDigest)
+      token.consumedAt = input.now
+      runner.enrollment = 'enrolled'
+      return runner
+    },
     async authenticateRunner(runnerId, credentialDigest) {
       const existing = runnerCredentials.get(runnerId)
       if (existing === undefined) {
@@ -621,7 +778,7 @@ export function createInMemoryInvocationStore(): InvocationStore {
     },
     async pollRunner(runnerId) {
       if (pausedRunners.has(runnerId)) return undefined
-      const capacity = runnerProfiles.get(runnerId)?.capacity ?? 1
+      const capacity = remoteRunners.get(runnerId)?.desiredCapacity ?? runnerProfiles.get(runnerId)?.capacity ?? 1
       if ([...leasesByJob.values()].filter((lease) => lease.runnerId === runnerId).length >= capacity) return undefined
       const inspection = [...inspectionsByJob.values()].find((candidate) => candidate.job.state === 'pending')
       if (!inspection) return undefined
@@ -693,6 +850,10 @@ async function matchingLease(
   return lease.tokenDigest === await sha256(input.leaseToken) ? lease : undefined
 }
 
+function usableSetupToken(token: StoredSetupToken | undefined, now: string): token is StoredSetupToken {
+  return token !== undefined && token.invalidatedAt === undefined && token.consumedAt === undefined && token.expiresAt > now
+}
+
 async function buildRecord(delivery: DeliveryInput): Promise<StoredRecord> {
   const createdAt = new Date().toISOString()
   const invocationId = opaqueId('inv')
@@ -746,6 +907,22 @@ async function buildRecord(delivery: DeliveryInput): Promise<StoredRecord> {
 
 export function createD1InvocationStore(database: D1Database) {
   return new D1InvocationStore(database)
+}
+
+type RemoteRunnerRow = {
+  runner_id: string
+  desired_capacity: number
+  enrollment_state: RemoteRunner['enrollment']
+  readiness_state: 'not_ready' | 'ready'
+}
+
+function remoteRunnerFromRow(row: RemoteRunnerRow): RemoteRunner {
+  return {
+    id: row.runner_id,
+    desiredCapacity: row.desired_capacity,
+    enrollment: row.enrollment_state,
+    ready: row.readiness_state === 'ready',
+  }
 }
 
 class D1InvocationStore implements InvocationStore {
@@ -904,6 +1081,84 @@ class D1InvocationStore implements InvocationStore {
     return row ? this.inspectJob(row.job_id) : undefined
   }
 
+  async createRemoteRunner(input: RemoteRunnerCreation): Promise<RemoteRunner> {
+    await this.database.batch([
+      this.database.prepare(`INSERT INTO remote_runners (
+        runner_id, kind, desired_capacity, enrollment_state, readiness_state, created_at
+      ) VALUES (?, 'remote', ?, 'awaiting_setup', 'not_ready', ?)`)
+        .bind(input.id, input.desiredCapacity, input.createdAt),
+      this.database.prepare(`INSERT INTO runner_setup_tokens (
+        token_id, runner_id, token_digest, expires_at, created_at
+      ) VALUES (?, ?, ?, ?, ?)`)
+        .bind(input.tokenId, input.id, input.tokenDigest, input.expiresAt, input.createdAt),
+    ])
+    return { id: input.id, desiredCapacity: input.desiredCapacity, enrollment: 'awaiting_setup', ready: false }
+  }
+
+  async regenerateSetupToken(input: NewSetupToken): Promise<RemoteRunner | undefined> {
+    const runner = await this.remoteRunner(input.runnerId)
+    if (!runner || runner.enrollment !== 'awaiting_setup') return undefined
+    const active = await this.database.prepare(`SELECT token_id FROM runner_setup_tokens
+      WHERE runner_id = ? AND consumed_at IS NULL AND invalidated_at IS NULL ORDER BY created_at DESC LIMIT 1`)
+      .bind(input.runnerId).first<{ token_id: string }>()
+    await this.database.batch([
+      this.database.prepare(`UPDATE runner_setup_tokens SET invalidated_at = ?
+        WHERE runner_id = ? AND consumed_at IS NULL AND invalidated_at IS NULL`).bind(input.createdAt, input.runnerId),
+      this.database.prepare(`INSERT INTO runner_setup_tokens (
+        token_id, runner_id, token_digest, expires_at, created_at, replaced_token_id
+      ) VALUES (?, ?, ?, ?, ?, ?)`)
+        .bind(input.tokenId, input.runnerId, input.tokenDigest, input.expiresAt, input.createdAt, active?.token_id ?? null),
+    ])
+    return runner
+  }
+
+  async preflightSetupToken(input: SetupTokenLookup): Promise<RemoteRunner | undefined> {
+    return this.remoteRunnerForSetupToken(input)
+  }
+
+  async enrollRemoteRunner(input: SetupTokenEnrollment): Promise<RemoteRunner | undefined> {
+    await this.database.batch([
+      this.database.prepare(`INSERT INTO runner_credentials (runner_id, credential_digest, created_at)
+        SELECT token.runner_id, ?, ? FROM runner_setup_tokens token
+        JOIN remote_runners runner ON runner.runner_id = token.runner_id
+        WHERE token.token_digest = ? AND token.expires_at > ? AND token.invalidated_at IS NULL
+          AND token.consumed_at IS NULL AND runner.enrollment_state = 'awaiting_setup'
+        ON CONFLICT(runner_id) DO NOTHING`).bind(input.credentialDigest, input.now, input.tokenDigest, input.now),
+      this.database.prepare(`UPDATE runner_setup_tokens SET consumed_at = ?
+        WHERE token_digest = ? AND expires_at > ? AND invalidated_at IS NULL AND consumed_at IS NULL
+          AND EXISTS (SELECT 1 FROM runner_credentials credential
+            WHERE credential.runner_id = runner_setup_tokens.runner_id AND credential.credential_digest = ?)`)
+        .bind(input.now, input.tokenDigest, input.now, input.credentialDigest),
+      this.database.prepare(`UPDATE remote_runners SET enrollment_state = 'enrolled'
+        WHERE runner_id = (SELECT runner_id FROM runner_setup_tokens WHERE token_digest = ? AND consumed_at = ?)
+          AND EXISTS (SELECT 1 FROM runner_credentials credential
+            WHERE credential.runner_id = remote_runners.runner_id AND credential.credential_digest = ?)`)
+        .bind(input.tokenDigest, input.now, input.credentialDigest),
+    ])
+    const row = await this.database.prepare(`SELECT runner.runner_id, runner.desired_capacity,
+      runner.enrollment_state, runner.readiness_state FROM remote_runners runner
+      JOIN runner_setup_tokens token ON token.runner_id = runner.runner_id
+      JOIN runner_credentials credential ON credential.runner_id = runner.runner_id
+      WHERE token.token_digest = ? AND token.consumed_at = ? AND credential.credential_digest = ?`)
+      .bind(input.tokenDigest, input.now, input.credentialDigest).first<RemoteRunnerRow>()
+    return row ? remoteRunnerFromRow(row) : undefined
+  }
+
+  private async remoteRunnerForSetupToken(input: SetupTokenLookup): Promise<RemoteRunner | undefined> {
+    const row = await this.database.prepare(`SELECT runner.runner_id, runner.desired_capacity,
+      runner.enrollment_state, runner.readiness_state FROM runner_setup_tokens token
+      JOIN remote_runners runner ON runner.runner_id = token.runner_id
+      WHERE token.token_digest = ? AND token.expires_at > ? AND token.invalidated_at IS NULL AND token.consumed_at IS NULL`)
+      .bind(input.tokenDigest, input.now).first<RemoteRunnerRow>()
+    return row ? remoteRunnerFromRow(row) : undefined
+  }
+
+  private async remoteRunner(runnerId: string): Promise<RemoteRunner | undefined> {
+    const row = await this.database.prepare(`SELECT runner_id, desired_capacity, enrollment_state, readiness_state
+      FROM remote_runners WHERE runner_id = ?`).bind(runnerId).first<RemoteRunnerRow>()
+    return row ? remoteRunnerFromRow(row) : undefined
+  }
+
   async authenticateRunner(_runnerId: string, _credentialDigest: string): Promise<boolean> {
     const createdAt = new Date().toISOString()
     await this.database.prepare(`INSERT INTO runner_credentials (runner_id, credential_digest, created_at)
@@ -930,8 +1185,10 @@ class D1InvocationStore implements InvocationStore {
   }
 
   async pollRunner(runnerId: string): Promise<LeaseGrant | undefined> {
-    const capacity = await this.database.prepare(`SELECT COALESCE((SELECT capacity FROM runner_profiles WHERE runner_id = ?), 1) AS capacity`)
-      .bind(runnerId).first<{ capacity: number }>()
+    const capacity = await this.database.prepare(`SELECT COALESCE(
+      (SELECT desired_capacity FROM remote_runners WHERE runner_id = ?),
+      (SELECT capacity FROM runner_profiles WHERE runner_id = ?), 1
+    ) AS capacity`).bind(runnerId, runnerId).first<{ capacity: number }>()
     const reservations = await this.database.prepare(`SELECT COUNT(*) AS count FROM runner_leases l
       JOIN jobs j ON j.job_id = l.job_id WHERE l.runner_id = ? AND j.cleanup_status IS NOT 'verified'`).bind(runnerId)
       .first<{ count: number }>()
