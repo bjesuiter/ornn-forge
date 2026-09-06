@@ -78,4 +78,4 @@ volumes:
 
 secrets:
   runner_credential:
-    environment: ORNN_RUNNER_CREDENTIAL
+    file: ${ORNN_RUNNER_CREDENTIAL_FILE:?The launcher must provide a temporary Runner credential file.}

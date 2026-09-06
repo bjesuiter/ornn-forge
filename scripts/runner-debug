@@ -41,6 +41,12 @@ if [ -z "${ORNN_RUNNER_CREDENTIAL:-}" ]; then
   exit 64
 fi
 
+umask 077
+credential_file=$(mktemp "${TMPDIR:-/tmp}/ornn-runner-credential.XXXXXX")
+trap 'rm -f "$credential_file"' EXIT HUP INT TERM
+printf '%s' "$ORNN_RUNNER_CREDENTIAL" > "$credential_file"
+export ORNN_RUNNER_CREDENTIAL_FILE="$credential_file"
+
 active_context=$(docker context show)
 engine_endpoint=$(docker context inspect --format '{{ .Endpoints.docker.Host }}' "$active_context")
 case "$engine_endpoint" in
@@ -77,4 +83,4 @@ export ORNN_DOCKER_SOCKET_GID="$docker_socket_gid"
 export ORNN_PROJECT_DIR="$project_directory"
 export ORNN_RUNNER_USER="$runner_user"
 
-exec docker compose --project-directory "$project_directory" -f "$project_directory/compose.runner-debug.yaml" "$@"
+docker compose --project-directory "$project_directory" -f "$project_directory/compose.runner-debug.yaml" "$@"

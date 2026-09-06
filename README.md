@@ -105,7 +105,9 @@ bunx varlock keychain set ORNN_RUNNER_CREDENTIAL --project ornn-forge --profile 
 ```
 
 That command creates a portable Keychain resolver in
-[`.env.runner-debug`](.env.runner-debug); it does not create a credential file.
+[`.env.runner-debug`](.env.runner-debug); it does not create a persistent
+credential file. The launcher creates a mode-`0600` temporary file only while
+Compose creates the Docker secret, then removes it.
 Run the current one-shot Fixture Runner with:
 
 ```sh
