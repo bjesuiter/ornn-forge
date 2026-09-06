@@ -17,4 +17,4 @@ export CLOUDFLARE_ACCOUNT_ID="$account_id"
 
 bun run build
 wrangler d1 migrations apply "$database_name" --remote --config "$config_file"
-wrangler deploy --keep-vars
+wrangler deploy --config dist/server/wrangler.json --keep-vars
