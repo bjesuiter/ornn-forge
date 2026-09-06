@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { envelope, type RunnerProfile } from '@ornn-forge/protocol'
-import { reconnectDelay, remoteRunnerConfigFromEnvironment, runRemoteRunner, type ControlSocket, type RunnerControlState } from './main'
+import { executeDockerFixture, reconnectDelay, remoteRunnerConfigFromEnvironment, runRemoteRunner, type ControlSocket, type RunnerControlState } from './main'
+import type { SandboxDriver } from './sandbox'
 
 const profile: RunnerProfile = {
   release: 'test', platform: 'linux', architecture: 'arm64', runtime: 'Bun test', executor: 'fixture', capacity: 1,
@@ -12,6 +13,7 @@ test('the Runner reads its mounted credential file without placing the secret in
     ORNN_CONTROL_PLANE_URL: 'https://control.test',
     ORNN_RUNNER_ID: 'runner_local_debug',
     ORNN_RUNNER_CREDENTIAL_FILE: '/run/secrets/runner_credential',
+    ORNN_RUNNER_EXECUTOR: 'fixture',
   }, async (path) => {
     expect(path).toBe('/run/secrets/runner_credential')
     return 'credential-from-file\n'
@@ -23,6 +25,48 @@ test('the Runner reads its mounted credential file without placing the secret in
     credential: 'credential-from-file',
     profile: { platform: process.platform, architecture: process.arch, executor: 'fixture', capacity: 1 },
   })
+})
+
+test('the Docker fixture executes through the SandboxDriver and verifies cleanup before returning its artifact', async () => {
+  const calls: string[] = []
+  const sandbox: SandboxDriver = {
+    async create(spec) {
+      calls.push(`create:${spec.sandboxId}:${spec.image}`)
+      return { ...spec, providerRef: 'container-123' }
+    },
+    async discover() { return [] },
+    async inspect() { return { state: 'absent', observedAt: '2026-09-07T12:00:00.000Z' } },
+    async exec(_lease, request) {
+      calls.push(`exec:${request.command.join(' ')}`)
+      return { exitCode: 0, stdout: new TextEncoder().encode('{"kind":"plan"}\n'), stderr: new Uint8Array() }
+    },
+    async readFile() { return new Uint8Array() },
+    async writeFile() {},
+    async collectArtifacts(_lease, paths) {
+      calls.push(`collect:${paths.join(',')}`)
+      return new Map([['/workspace/fixture-artifact.json', new TextEncoder().encode('{"kind":"plan"}\n')]])
+    },
+    async terminate(_lease, reason) { calls.push(`terminate:${reason}`) },
+    async destroy() { calls.push('destroy') },
+  }
+  const completion = await executeDockerFixture({
+    runnerId: 'runner_v1_abcdefghijklmnopqrstuv',
+    image: 'busybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    driver: sandbox,
+    now: () => '2026-09-07T12:00:00.000Z',
+  }, {
+    jobId: 'job_v1_abcdefghijklmnopqrstuv', leaseToken: 'lease_v1_123', generation: 1, expiresAt: '2026-09-07T12:15:00.000Z',
+    workOrder: { issueNumber: 1, title: 'Fixture', body: '', comment: '@ornn' },
+  }, new AbortController().signal)
+
+  expect(completion).toMatchObject({ artifact: { schemaVersion: 1, kind: 'plan', summary: 'Fixture analysis complete' }, cleanupStatus: 'verified' })
+  expect(calls).toEqual([
+    'create:sandbox_v1_job_v1_abcdefghijklmnopqrstuv-1:busybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    "exec:sh -ceu printf '{\"kind\":\"plan\"}\\n' > /workspace/fixture-artifact.json",
+    'collect:/workspace/fixture-artifact.json',
+    'terminate:completed',
+    'destroy',
+  ])
 })
 
 test('the Runner synchronizes its credential-free recovery state before accepting fixture work', async () => {

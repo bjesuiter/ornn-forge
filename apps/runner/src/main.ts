@@ -7,12 +7,15 @@ import {
   type RunnerProfile,
 } from '@ornn-forge/protocol'
 import { unlink } from 'node:fs/promises'
+import { createDockerCliGateway } from './docker-gateway'
+import { createDockerSandboxDriver, type SandboxDriver } from './sandbox'
 
 export type RemoteRunnerConfig = {
   controlPlaneUrl: string
   runnerId: string
   credential: string
   profile: RunnerProfile
+  sandboxImage?: string
 }
 
 export type RunnerControlState = {
@@ -36,6 +39,7 @@ export type ControlSocket = {
 export type WebSocketFactory = (url: string, headers: Record<string, string>) => ControlSocket
 
 type Sleep = (milliseconds: number) => Promise<void>
+export type LeaseExecutor = (lease: LeaseGrant, signal: AbortSignal) => Promise<{ artifact: ReturnType<typeof fixtureArtifact>; cleanupStatus: 'verified' | 'failed' }>
 
 export async function remoteRunnerConfigFromEnvironment(
   environment: Record<string, string | undefined> = process.env,
@@ -52,6 +56,9 @@ export async function remoteRunnerConfigFromEnvironment(
     throw new Error('ORNN_CONTROL_PLANE_URL, ORNN_RUNNER_ID, and ORNN_RUNNER_CREDENTIAL or ORNN_RUNNER_CREDENTIAL_FILE are required')
   }
 
+  const executor = environment.ORNN_RUNNER_EXECUTOR ?? 'docker'
+  const sandboxImage = environment.ORNN_SANDBOX_IMAGE
+  if (executor === 'docker' && !sandboxImage) throw new Error('ORNN_SANDBOX_IMAGE is required when ORNN_RUNNER_EXECUTOR is docker')
   return {
     controlPlaneUrl,
     runnerId,
@@ -61,11 +68,12 @@ export async function remoteRunnerConfigFromEnvironment(
       platform: process.platform,
       architecture: process.arch,
       runtime: `Bun ${Bun.version}`,
-      executor: environment.ORNN_RUNNER_EXECUTOR ?? 'fixture',
+      executor,
       capacity: runnerCapacity(environment.ORNN_RUNNER_CAPACITY),
       logicalCpuCount: Math.max(1, navigator.hardwareConcurrency ?? 1),
       memoryLimitBytes: 128 * 1024 * 1024,
     },
+    sandboxImage,
   }
 }
 
@@ -78,6 +86,7 @@ export async function runRemoteRunner(
     random?: () => number
     signal?: AbortSignal
     onSynchronized?: () => void
+    executeLease?: LeaseExecutor
   } = {},
 ): Promise<void> {
   const stateStore = options.stateStore ?? fileRunnerStateStore()
@@ -88,7 +97,7 @@ export async function runRemoteRunner(
   let attempt = 0
   while (!options.signal?.aborted) {
     try {
-      const connection = await openControlConnection(config, stateStore, createSocket, options.onSynchronized)
+      const connection = await openControlConnection(config, stateStore, createSocket, options.onSynchronized, options.executeLease ?? defaultLeaseExecutor(config))
       attempt = 0
       await connection.closed
     } catch {
@@ -96,6 +105,13 @@ export async function runRemoteRunner(
     }
     if (!options.signal?.aborted) await sleep(reconnectDelay(attempt, random))
   }
+}
+
+function defaultLeaseExecutor(config: RemoteRunnerConfig): LeaseExecutor {
+  if (config.profile.executor !== 'docker') return async () => ({ artifact: fixtureArtifact(), cleanupStatus: 'verified' })
+  if (!config.sandboxImage) throw new Error('Docker Runner is missing its digest-pinned sandbox image')
+  const driver = createDockerSandboxDriver({ gateway: createDockerCliGateway() })
+  return (lease, signal) => executeDockerFixture({ runnerId: config.runnerId, image: config.sandboxImage as string, driver }, lease, signal)
 }
 
 export function reconnectDelay(attempt: number, random: () => number = Math.random): number {
@@ -109,6 +125,7 @@ async function openControlConnection(
   stateStore: RunnerStateStore,
   createSocket: WebSocketFactory,
   onSynchronized: (() => void) | undefined,
+  executeLease: LeaseExecutor,
 ): Promise<{ closed: Promise<void> }> {
   const state = await stateStore.load()
   const socket = createSocket(controlSocketUrl(config.controlPlaneUrl), {
@@ -137,7 +154,7 @@ async function openControlConnection(
     })))
   })
   socket.addEventListener('message', (event) => {
-    void handleControlMessage(event.data, { config, socket, state, stateStore, markSynchronized: async () => {
+    void handleControlMessage(event.data, { config, socket, state, stateStore, executeLease, markSynchronized: async () => {
       synchronized = true
       await stateStore.markSynchronized()
       const heartbeat = () => socket.send(JSON.stringify(envelope('runner.heartbeat', { runnerId: config.runnerId, instanceId })))
@@ -171,6 +188,7 @@ async function handleControlMessage(
     socket: ControlSocket
     state: RunnerControlState
     stateStore: RunnerStateStore
+    executeLease: LeaseExecutor
     markSynchronized: () => Promise<void>
   },
 ): Promise<void> {
@@ -205,10 +223,8 @@ async function handleControlMessage(
     }
     context.socket.send(JSON.stringify(envelope('lease.accept', leaseScope(context.config, lease))))
     context.socket.send(JSON.stringify(envelope('lease.heartbeat', leaseScope(context.config, lease))))
-    context.socket.send(JSON.stringify(envelope('lease.result', {
-      ...leaseScope(context.config, lease),
-      artifact: fixtureArtifact(),
-    })))
+    const completion = await context.executeLease(lease, new AbortController().signal)
+    context.socket.send(JSON.stringify(envelope('lease.result', { ...leaseScope(context.config, lease), ...completion })))
   }
 }
 
@@ -285,6 +301,43 @@ function fixtureArtifact() {
     kind: 'plan' as const,
     summary: 'Fixture analysis complete',
     details: 'The deterministic Remote Runner fixture completed through the production control connection.',
+  }
+}
+
+export async function executeDockerFixture(
+  options: { runnerId: string; image: string; driver: SandboxDriver; now?: () => string },
+  lease: LeaseGrant,
+  signal: AbortSignal,
+): Promise<{ artifact: ReturnType<typeof fixtureArtifact>; cleanupStatus: 'verified' | 'failed' }> {
+  const createdAt = (options.now ?? (() => new Date().toISOString()))()
+  const sandbox = await options.driver.create({
+    sandboxId: `sandbox_v1_${lease.jobId}-${lease.generation}`,
+    generation: lease.generation,
+    runnerId: options.runnerId,
+    specFingerprint: `docker-fixture-v1:${options.image}`,
+    createdAt,
+    expiresAt: lease.expiresAt,
+    image: options.image,
+    command: ['sh', '-ceu', 'mkdir -p /workspace && sleep infinity'],
+    resources: { memoryBytes: 128 * 1024 * 1024, pidsLimit: 64 },
+  }, signal)
+  try {
+    const result = await options.driver.exec(sandbox, { command: ['sh', '-ceu', "printf '{\"kind\":\"plan\"}\\n' > /workspace/fixture-artifact.json"] }, signal)
+    if (result.exitCode !== 0) throw new Error('Docker fixture command failed')
+    const files = await options.driver.collectArtifacts(sandbox, ['/workspace/fixture-artifact.json'])
+    if (new TextDecoder().decode(files.get('/workspace/fixture-artifact.json')) !== '{"kind":"plan"}\n') throw new Error('Docker fixture artifact was invalid')
+    const artifact = fixtureArtifact()
+    try {
+      await options.driver.terminate(sandbox, 'completed').catch(() => undefined)
+      await options.driver.destroy(sandbox)
+      return { artifact, cleanupStatus: 'verified' }
+    } catch {
+      return { artifact, cleanupStatus: 'failed' }
+    }
+  } catch (error) {
+    await options.driver.terminate(sandbox, 'failed').catch(() => undefined)
+    await options.driver.destroy(sandbox).catch(() => undefined)
+    throw error
   }
 }
 

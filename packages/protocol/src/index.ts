@@ -41,6 +41,7 @@ export type RunnerResult = RunnerEnvelope<'lease.result', {
   jobId: string
   leaseToken: string
   artifact: AnalysisArtifact
+  cleanupStatus: 'verified' | 'failed'
 }>
 export type RunnerReport = RunnerEnvelope<'runner.report', { runnerId: string; fault: RunnerFault }>
 export type RunnerSynchronize = RunnerEnvelope<'runner.synchronize', RunnerSynchronization>

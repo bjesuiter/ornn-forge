@@ -116,7 +116,7 @@ export interface InvocationStore {
   pollRunner?(runnerId: string): Promise<LeaseGrant | undefined>
   setRunnerPaused?(runnerId: string, paused: boolean): Promise<boolean>
   heartbeatLease?(input: LeaseInput): Promise<boolean>
-  completeLease?(input: LeaseInput & { artifact: AnalysisArtifact }): Promise<'accepted' | 'invalid_artifact'>
+  completeLease?(input: LeaseInput & { artifact: AnalysisArtifact; cleanupStatus: 'verified' | 'failed' }): Promise<'accepted' | 'invalid_artifact'>
   recordRunnerSuccess?(runnerId: string): Promise<void>
   recordRunnerFault?(runnerId: string, fault: RunnerFault): Promise<void>
   recordMessagePublication?(jobId: string, update: { githubCommentId?: string; attempt: OrnnMessageState['latestAttempt'] }): Promise<void>
@@ -360,6 +360,7 @@ async function handleRunnerRequest(
     jobId: leaseInput.jobId,
     leaseToken: leaseInput.leaseToken,
     artifact: leaseInput.artifact,
+    cleanupStatus: leaseInput.cleanupStatus === 'failed' ? 'failed' : 'verified',
   })
   if (completed === 'accepted') {
     await options.store.recordRunnerSuccess?.(runnerId)
@@ -886,7 +887,7 @@ export function createInMemoryInvocationStore(): InvocationStore {
       inspection.job.state = 'succeeded'
       inspection.artifact = input.artifact
       inspection.executionOutcome = { status: 'succeeded', completedAt: new Date().toISOString() }
-      inspection.cleanupStatus = { status: 'verified', updatedAt: inspection.executionOutcome.completedAt }
+      inspection.cleanupStatus = { status: input.cleanupStatus, updatedAt: inspection.executionOutcome.completedAt }
       if (inspection.message) {
         inspection.message.revision += 1
         inspection.message.latestAttempt = 'pending'
@@ -1393,7 +1394,7 @@ class D1InvocationStore implements InvocationStore {
     return result.meta.changes === 1
   }
 
-  async completeLease(input: LeaseInput & { artifact: AnalysisArtifact }): Promise<'accepted' | 'invalid_artifact'> {
+  async completeLease(input: LeaseInput & { artifact: AnalysisArtifact; cleanupStatus: 'verified' | 'failed' }): Promise<'accepted' | 'invalid_artifact'> {
     const artifactJson = canonicalJson(input.artifact)
     if (new TextEncoder().encode(artifactJson).byteLength > 512 * 1024) return 'invalid_artifact'
     const now = new Date().toISOString()
@@ -1406,10 +1407,10 @@ class D1InvocationStore implements InvocationStore {
     const eventPayload = canonicalJson({ jobId: input.jobId, result: input.artifact.kind })
     const eventPayloadSha256 = await sha256(eventPayload)
     await this.database.batch([
-      this.database.prepare(`UPDATE jobs SET state = 'succeeded', execution_status = 'succeeded', execution_completed_at = ?, cleanup_status = 'verified', cleanup_updated_at = ?
+      this.database.prepare(`UPDATE jobs SET state = 'succeeded', execution_status = 'succeeded', execution_completed_at = ?, cleanup_status = ?, cleanup_updated_at = ?
         WHERE job_id = ? AND state = 'leased' AND EXISTS (SELECT 1 FROM runner_leases
         WHERE job_id = ? AND runner_id = ? AND token_digest = ? AND expires_at > ?)`).bind(
-        now, now, input.jobId, input.jobId, input.runnerId, tokenDigest, now,
+        now, input.cleanupStatus, now, input.jobId, input.jobId, input.runnerId, tokenDigest, now,
       ),
       this.database.prepare(`INSERT INTO analysis_artifacts (job_id, schema_version, artifact_json, created_at)
         SELECT ?, 1, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'succeeded')

@@ -302,6 +302,29 @@ test('leases one pending Job to its authenticated Runner and records its fixture
   expect(calls[1]).toContain('update:17:Ornn Analyze Job completed: Fixture analysis complete')
 })
 
+test('keeps a completed Job reserved when the Runner cannot verify Docker cleanup', async () => {
+  const app = createControlPlane({
+    store: createInMemoryInvocationStore(), githubWebhookSecret: webhookSecret, githubInstallationId: '42', githubRepositoryId: '99',
+    operatorBearerSecret: operatorSecret, runnerCredentialId: 'runner_homeserv1', runnerCredentialSecret: 'r'.repeat(32),
+  })
+  const request = (type: string, payload: Record<string, unknown>) => new Request(`https://ornn.example/api/v1/runner/${type}`, {
+    method: 'POST', headers: { authorization: `Bearer ${'r'.repeat(32)}`, 'content-type': 'application/json', 'x-ornn-runner-id': 'runner_homeserv1' },
+    body: JSON.stringify(envelope(`runner.${type}`, payload)),
+  })
+  const admitted = await app.fetch(await signedWebhookRequest('delivery-cleanup-failed', issueComment()))
+  const { jobId } = await admitted.json() as { jobId: string }
+  const lease = await (await app.fetch(request('poll', { runnerId: 'runner_homeserv1' }))).json() as { payload: { leaseToken: string } }
+
+  const result = await app.fetch(request('result', {
+    runnerId: 'runner_homeserv1', jobId, leaseToken: lease.payload.leaseToken, cleanupStatus: 'failed',
+    artifact: { schemaVersion: 1, kind: 'plan', summary: 'Fixture analysis complete', details: 'Cleanup did not verify.' },
+  }))
+  expect(result.status).toBe(200)
+  const inspected = await app.fetch(new Request(`https://ornn.example/api/v1/jobs/${jobId}`, { headers: { authorization: `Bearer ${operatorSecret}` } }))
+  expect(await inspected.json()).toMatchObject({ job: { state: 'succeeded' }, executionOutcome: { status: 'succeeded' }, cleanupStatus: { status: 'failed' } })
+  expect(await (await app.fetch(request('poll', { runnerId: 'runner_homeserv1' }))).json()).toMatchObject({ type: 'runner.no_work' })
+})
+
 test('a paused Runner receives no new lease until an Operator resumes it', async () => {
   const store = createInMemoryInvocationStore()
   const app = createControlPlane({

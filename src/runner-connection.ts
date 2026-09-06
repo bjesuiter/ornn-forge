@@ -62,7 +62,7 @@ export class RunnerConnection extends DurableObject<Cloudflare.Env> {
     if (parsed.value.type === 'lease.result') {
       const lease = leaseInput(parsed.value.payload, state.runnerId)
       const completed = lease && isAnalysisArtifact(parsed.value.payload.artifact)
-        ? await store.completeLease?.({ ...lease, artifact: parsed.value.payload.artifact })
+        ? await store.completeLease?.({ ...lease, artifact: parsed.value.payload.artifact, cleanupStatus: parsed.value.payload.cleanupStatus === 'failed' ? 'failed' : 'verified' })
         : undefined
       if (completed === 'accepted') await store.recordRunnerSuccess?.(state.runnerId)
       if (completed === 'accepted' && lease) await publishJobMessage(store, createGitHubMessagePublisher({
