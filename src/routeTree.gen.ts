@@ -14,6 +14,7 @@ import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
 import { Route as DashboardExamplesRouteImport } from './routes/dashboard.examples'
+import { Route as ApiV1SplatRouteImport } from './routes/api/v1/$'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiV1RunnerConnectRouteImport } from './routes/api/v1/runner/connect'
 import { Route as ApiV1RunnerOperationRouteImport } from './routes/api/v1/runner/$operation'
@@ -45,6 +46,11 @@ const DashboardExamplesRoute = DashboardExamplesRouteImport.update({
   id: '/examples',
   path: '/examples',
   getParentRoute: () => DashboardRoute,
+} as any)
+const ApiV1SplatRoute = ApiV1SplatRouteImport.update({
+  id: '/api/v1/$',
+  path: '/api/v1/$',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
@@ -85,6 +91,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/examples': typeof DashboardExamplesRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/v1/$': typeof ApiV1SplatRoute
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
   '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
   '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
@@ -97,6 +104,7 @@ export interface FileRoutesByTo {
   '/dashboard/examples': typeof DashboardExamplesRoute
   '/dashboard': typeof DashboardIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/v1/$': typeof ApiV1SplatRoute
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
   '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
   '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
@@ -111,6 +119,7 @@ export interface FileRoutesById {
   '/dashboard/examples': typeof DashboardExamplesRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
+  '/api/v1/$': typeof ApiV1SplatRoute
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
   '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
   '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
@@ -126,6 +135,7 @@ export interface FileRouteTypes {
     | '/dashboard/examples'
     | '/dashboard/'
     | '/api/auth/$'
+    | '/api/v1/$'
     | '/api/v1/github/webhook'
     | '/api/v1/jobs/$jobId'
     | '/api/v1/messages/$ornnMessageId'
@@ -138,6 +148,7 @@ export interface FileRouteTypes {
     | '/dashboard/examples'
     | '/dashboard'
     | '/api/auth/$'
+    | '/api/v1/$'
     | '/api/v1/github/webhook'
     | '/api/v1/jobs/$jobId'
     | '/api/v1/messages/$ornnMessageId'
@@ -151,6 +162,7 @@ export interface FileRouteTypes {
     | '/dashboard/examples'
     | '/dashboard/'
     | '/api/auth/$'
+    | '/api/v1/$'
     | '/api/v1/github/webhook'
     | '/api/v1/jobs/$jobId'
     | '/api/v1/messages/$ornnMessageId'
@@ -163,6 +175,7 @@ export interface RootRouteChildren {
   DashboardRoute: typeof DashboardRouteWithChildren
   LoginRoute: typeof LoginRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
+  ApiV1SplatRoute: typeof ApiV1SplatRoute
   ApiV1GithubWebhookRoute: typeof ApiV1GithubWebhookRoute
   ApiV1JobsJobIdRoute: typeof ApiV1JobsJobIdRoute
   ApiV1MessagesOrnnMessageIdRoute: typeof ApiV1MessagesOrnnMessageIdRoute
@@ -206,6 +219,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/dashboard/examples'
       preLoaderRoute: typeof DashboardExamplesRouteImport
       parentRoute: typeof DashboardRoute
+    }
+    '/api/v1/$': {
+      id: '/api/v1/$'
+      path: '/api/v1/$'
+      fullPath: '/api/v1/$'
+      preLoaderRoute: typeof ApiV1SplatRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/auth/$': {
       id: '/api/auth/$'
@@ -271,6 +291,7 @@ const rootRouteChildren: RootRouteChildren = {
   DashboardRoute: DashboardRouteWithChildren,
   LoginRoute: LoginRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
+  ApiV1SplatRoute: ApiV1SplatRoute,
   ApiV1GithubWebhookRoute: ApiV1GithubWebhookRoute,
   ApiV1JobsJobIdRoute: ApiV1JobsJobIdRoute,
   ApiV1MessagesOrnnMessageIdRoute: ApiV1MessagesOrnnMessageIdRoute,
