@@ -859,6 +859,7 @@ export function createInMemoryInvocationStore(): InvocationStore {
         leaseToken: token,
         generation,
         expiresAt,
+        repository: { fullName: inspection.invocation.github.repository.fullName },
         workOrder: {
           issueNumber: inspection.invocation.github.issue.number,
           title: inspection.invocation.github.issue.title,
@@ -1315,10 +1316,10 @@ class D1InvocationStore implements InvocationStore {
       JOIN jobs j ON j.job_id = l.job_id WHERE l.runner_id = ? AND j.cleanup_status IS NOT 'verified'`).bind(runnerId)
       .first<{ count: number }>()
     if ((reservations?.count ?? 0) >= (capacity?.capacity ?? 1)) return undefined
-    const candidate = await this.database.prepare(`SELECT j.job_id, i.github_issue_number, i.github_issue_title,
+    const candidate = await this.database.prepare(`SELECT j.job_id, i.github_repository_full_name, i.github_issue_number, i.github_issue_title,
       i.github_issue_body, i.github_comment_body FROM jobs j JOIN invocations i ON i.invocation_id = j.invocation_id
       WHERE j.state = 'pending' ORDER BY j.created_at ASC LIMIT 1`).first<{
-        job_id: string; github_issue_number: number; github_issue_title: string; github_issue_body: string; github_comment_body: string
+        job_id: string; github_repository_full_name: string; github_issue_number: number; github_issue_title: string; github_issue_body: string; github_comment_body: string
       }>()
     if (!candidate) return undefined
     const now = new Date().toISOString()
@@ -1354,6 +1355,7 @@ class D1InvocationStore implements InvocationStore {
       leaseToken,
       generation: persisted.generation,
       expiresAt,
+      repository: { fullName: candidate.github_repository_full_name },
       workOrder: {
         issueNumber: candidate.github_issue_number,
         title: candidate.github_issue_title,

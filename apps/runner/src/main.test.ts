@@ -56,6 +56,7 @@ test('the Docker fixture executes through the SandboxDriver and verifies cleanup
     now: () => '2026-09-07T12:00:00.000Z',
   }, {
     jobId: 'job_v1_abcdefghijklmnopqrstuv', leaseToken: 'lease_v1_123', generation: 1, expiresAt: '2026-09-07T12:15:00.000Z',
+    repository: { fullName: 'bjesuiter/ornn-forge' },
     workOrder: { issueNumber: 1, title: 'Fixture', body: '', comment: '@ornn' },
   }, new AbortController().signal)
 
@@ -128,6 +129,7 @@ test('the Runner persists a lease before accepting and completing it', async () 
     onSynchronized() {
       socket.emit('message', JSON.stringify(envelope('runner.lease', {
         jobId: 'job_v1_123', leaseToken: 'lease_v1_123', generation: 1, expiresAt: '2026-09-06T00:00:00.000Z',
+        repository: { fullName: 'bjesuiter/ornn-forge' },
         workOrder: { issueNumber: 1, title: 'Fixture', body: '', comment: '@ornn' },
       })))
       controller.abort()

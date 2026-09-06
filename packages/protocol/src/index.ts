@@ -66,6 +66,7 @@ export type LeaseGrant = {
   leaseToken: string
   generation: number
   expiresAt: string
+  repository: { fullName: string }
   workOrder: { issueNumber: number; title: string; body: string; comment: string }
 }
 
