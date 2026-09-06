@@ -97,18 +97,26 @@ inspects the created pending Job through the deployed Worker.
 
 The Runner can be exercised locally without installing Bun or the Runner on the
 host. It is a development test harness, not a `homeserv1` deployment. Start
-OrbStack (macOS) or the local Docker Engine (Linux), then run:
+OrbStack (macOS) or the local Docker Engine (Linux), then store the Runner
+transport credential in macOS Keychain:
 
 ```sh
-ORNN_CONTROL_PLANE_URL=https://control.test \
-ORNN_RUNNER_ID=runner_local_debug \
-ORNN_RUNNER_CREDENTIAL_FILE=/secure/local-runner-credential \
-scripts/runner-debug up --build
+bunx varlock keychain set ORNN_RUNNER_CREDENTIAL --project ornn-forge --profile runner-debug --write-to .env.runner-debug
+```
+
+That command creates a portable Keychain resolver in
+[`.env.runner-debug`](.env.runner-debug); it does not create a credential file.
+Run the current one-shot Fixture Runner with:
+
+```sh
+bun run runner:debug -- --root run --rm runner
 ```
 
 The launcher uses only the active Docker context's Unix socket and refuses TCP,
-SSH, or unavailable endpoints. It mounts the checkout into the Runner for watch
-mode, but Job sandboxes never receive the host checkout, Docker socket, Runner
-state, or credential file. Use `scripts/runner-debug --root up --build` only as
-the explicit OrbStack fallback when its forwarded socket cannot be read by the
-container's normal `bun` user.
+SSH, or unavailable endpoints. Compose turns the Varlock-provided value into an
+in-memory Docker secret mounted only at `/run/secrets/runner_credential`; it is
+not a container environment variable. The checkout is mounted into the Runner
+for watch mode, but Job sandboxes never receive the host checkout, Docker
+socket, Runner state, or credential. Use `--root` only as the explicit OrbStack
+fallback when its forwarded socket cannot be read by the container's normal
+`bun` user.

@@ -78,4 +78,4 @@ volumes:
 
 secrets:
   runner_credential:
-    file: ${ORNN_RUNNER_CREDENTIAL_FILE:?Set a path to the development Runner credential file.}
+    environment: ORNN_RUNNER_CREDENTIAL
