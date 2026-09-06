@@ -4,7 +4,7 @@
   "account_id": "7e9734d5c0feea43997adfc4ca287008",
   "compatibility_date": "2026-07-10",
   "compatibility_flags": ["nodejs_compat"],
-  "main": "@tanstack/react-start/server-entry",
+  "main": "src/server.ts",
   "vars": {
     "GITHUB_APP_INSTALLATION_ID": "159365588",
     "GITHUB_REPOSITORY_ID": "1296836371",
@@ -20,5 +20,8 @@
   ],
   "observability": {
     "enabled": true
+  },
+  "triggers": {
+    "crons": ["0 0 * * *"]
   }
 }
