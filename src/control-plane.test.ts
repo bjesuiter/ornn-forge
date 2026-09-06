@@ -5,6 +5,11 @@ import { envelope } from '@ornn-forge/protocol'
 const webhookSecret = 'webhook-secret'
 const operatorSecret = 'o'.repeat(32)
 
+async function sha256Hex(value: string): Promise<string> {
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
 async function signedWebhookRequest(
   deliveryId: string,
   payload: Record<string, unknown>,
@@ -194,6 +199,30 @@ test('routes an authenticated WebSocket upgrade to the identity-selected Runner 
   expect(response.status).toBe(200)
   expect(selectedRunner).toBe('runner_homeserv1')
   expect(authorization).toBeNull()
+})
+
+test('authenticates an enrolled base64url Runner credential on its WebSocket upgrade', async () => {
+  const store = createInMemoryInvocationStore()
+  const credential = 'A'.repeat(43)
+  const credentialDigest = await sha256Hex(credential)
+  await store.createRemoteRunner?.({
+    id: 'runner_v1_abcdefghijklmnopqrstuv', desiredCapacity: 1,
+    tokenId: 'setup_token_v1_abcdefghijklmnopqrstuv', tokenDigest: 'setup-digest',
+    createdAt: '2026-09-07T00:00:00.000Z', expiresAt: '2026-09-07T00:15:00.000Z',
+  })
+  await store.enrollRemoteRunner?.({ tokenDigest: 'setup-digest', credentialDigest, now: '2026-09-07T00:01:00.000Z' })
+  let selectedRunner: string | undefined
+  const app = createControlPlane({
+    store, githubWebhookSecret: webhookSecret, githubInstallationId: '42', githubRepositoryId: '99', operatorBearerSecret: operatorSecret,
+    runnerConnection: { async connect(runnerId) { selectedRunner = runnerId; return new Response('connected') } },
+  })
+
+  const response = await app.fetch(new Request('https://ornn.example/api/v1/runner/connect', {
+    headers: { upgrade: 'websocket', authorization: `Bearer ${credential}`, 'x-ornn-runner-id': 'runner_v1_abcdefghijklmnopqrstuv' },
+  }))
+
+  expect(response.status).toBe(200)
+  expect(selectedRunner).toBe('runner_v1_abcdefghijklmnopqrstuv')
 })
 
 test('does not expose legacy Runner polling when the Worker uses enrolled Runner credentials', async () => {

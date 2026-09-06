@@ -275,10 +275,11 @@ async function handleRunnerConnection(request: Request, options: ControlPlaneOpt
 async function authenticatedRunnerId(request: Request, options: ControlPlaneOptions, expectedCredential: Uint8Array | undefined): Promise<string | undefined> {
   const runnerId = request.headers.get('x-ornn-runner-id')
   const authorization = request.headers.get('authorization')
-  const providedCredential = authorization?.startsWith('Bearer ') ? runnerCredentialBytes(authorization.slice('Bearer '.length)) : undefined
-  if (!runnerId || !providedCredential || !options.store.authenticateRunner) return undefined
+  const providedCredentialText = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : undefined
+  const providedCredential = providedCredentialText === undefined ? undefined : runnerCredentialBytes(providedCredentialText)
+  if (!runnerId || !providedCredentialText || !providedCredential || !options.store.authenticateRunner) return undefined
   if (expectedCredential && (!options.runnerCredentialId || runnerId !== options.runnerCredentialId || !constantTimeEqual(await digest(providedCredential), await digest(expectedCredential)))) return undefined
-  return (await options.store.authenticateRunner(runnerId, await sha256Bytes(providedCredential))) ? runnerId : undefined
+  return (await options.store.authenticateRunner(runnerId, await sha256(providedCredentialText))) ? runnerId : undefined
 }
 
 async function handleRunnerRequest(
@@ -289,13 +290,12 @@ async function handleRunnerRequest(
 ): Promise<Response> {
   const runnerId = request.headers.get('x-ornn-runner-id')
   const authorization = request.headers.get('authorization')
-  const providedCredential = authorization?.startsWith('Bearer ')
-    ? runnerCredentialBytes(authorization.slice('Bearer '.length))
-    : undefined
-  if (!runnerId || runnerId !== options.runnerCredentialId || !expectedCredential || !providedCredential ||
+  const providedCredentialText = authorization?.startsWith('Bearer ') ? authorization.slice('Bearer '.length) : undefined
+  const providedCredential = providedCredentialText === undefined ? undefined : runnerCredentialBytes(providedCredentialText)
+  if (!runnerId || runnerId !== options.runnerCredentialId || !expectedCredential || !providedCredentialText || !providedCredential ||
     !constantTimeEqual(await digest(providedCredential), await digest(expectedCredential)) ||
     !options.store.authenticateRunner ||
-    !(await options.store.authenticateRunner(runnerId, await sha256Bytes(providedCredential)))) {
+    !(await options.store.authenticateRunner(runnerId, await sha256(providedCredentialText)))) {
     return runnerJson(envelope('lease.rejected', { code: 'runner_unauthorized' }), 401)
   }
 
