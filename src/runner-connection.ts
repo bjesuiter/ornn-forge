@@ -117,8 +117,9 @@ async function offerAvailableLeases(socket: WebSocket, store: InvocationStore, r
       }).resolve(lease.repository.fullName)
       socket.send(JSON.stringify(envelope('runner.lease', { ...lease, checkout })))
     } catch {
+      await store.releaseLease?.({ runnerId, jobId: lease.jobId, leaseToken: lease.leaseToken })
       await store.recordRunnerFault?.(runnerId, { code: 'runner.repository_checkout_unavailable' })
-      socket.send(JSON.stringify(envelope('runner.lease', lease)))
+      return
     }
   }
 }

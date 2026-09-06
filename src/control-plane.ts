@@ -116,6 +116,7 @@ export interface InvocationStore {
   pollRunner?(runnerId: string): Promise<LeaseGrant | undefined>
   setRunnerPaused?(runnerId: string, paused: boolean): Promise<boolean>
   heartbeatLease?(input: LeaseInput): Promise<boolean>
+  releaseLease?(input: LeaseInput): Promise<boolean>
   completeLease?(input: LeaseInput & { artifact: AnalysisArtifact; cleanupStatus: 'verified' | 'failed' }): Promise<'accepted' | 'invalid_artifact'>
   recordRunnerSuccess?(runnerId: string): Promise<void>
   recordRunnerFault?(runnerId: string, fault: RunnerFault): Promise<void>
@@ -486,7 +487,10 @@ function renderMessage(inspection: JobInspection): string {
   const status = inspection.job.state === 'succeeded'
     ? `completed: ${inspection.artifact?.summary ?? 'Analysis completed'}`
     : 'accepted and waiting for a Runner.'
-  return `Ornn Analyze Job ${status}\n\nOrnn message ID: \`${inspection.message?.id}\`\n<!-- ornn-effect:${inspection.message?.effectKey} -->`
+  const cleanupWarning = inspection.cleanupStatus?.status === 'failed'
+    ? '\n\nWarning: Docker cleanup could not be verified; Runner capacity remains reserved.'
+    : ''
+  return `Ornn Analyze Job ${status}${cleanupWarning}\n\nOrnn message ID: \`${inspection.message?.id}\`\n<!-- ornn-effect:${inspection.message?.effectKey} -->`
 }
 
 function parseIssueComment(body: string): Omit<DeliveryInput, 'deliveryId' | 'bodySha256'> | undefined {
@@ -878,6 +882,15 @@ export function createInMemoryInvocationStore(): InvocationStore {
       const lease = await matchingLease(leasesByJob, input)
       if (!lease) return false
       lease.expiresAt = new Date(Date.now() + 60_000).toISOString()
+      return true
+    },
+    async releaseLease(input) {
+      const lease = await matchingLease(leasesByJob, input)
+      const inspection = inspectionsByJob.get(input.jobId)
+      if (!lease || !inspection || inspection.job.state !== 'leased') return false
+      leasesByJob.delete(input.jobId)
+      inspection.job.state = 'pending'
+      inspection.events.push({ id: opaqueId('evt'), type: 'job.lease_released', revision: String(inspection.events.length + 1), occurredAt: new Date().toISOString() })
       return true
     },
     async completeLease(input) {
@@ -1329,6 +1342,7 @@ class D1InvocationStore implements InvocationStore {
     const eventId = opaqueId('evt')
     const eventPayload = canonicalJson({ jobId: candidate.job_id, runnerId, expiresAt })
     const eventPayloadSha256 = await sha256(eventPayload)
+    const revision = await this.nextJobRevision(candidate.job_id)
     await this.database.batch([
       this.database.prepare(`INSERT INTO runner_leases (job_id, runner_id, generation, token_digest, expires_at, last_heartbeat_at, created_at)
         SELECT ?, ?, 1, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'pending')
@@ -1342,9 +1356,9 @@ class D1InvocationStore implements InvocationStore {
       this.database.prepare(`UPDATE jobs SET state = 'leased' WHERE job_id = ? AND state = 'pending'
         AND EXISTS (SELECT 1 FROM runner_leases WHERE job_id = ? AND token_digest = ?)`).bind(candidate.job_id, candidate.job_id, tokenDigest),
       this.database.prepare(`INSERT INTO domain_events (event_id, schema_version, stream_kind, stream_id, revision, event_type, payload_json, payload_sha256, created_at)
-        SELECT ?, ?, 'job', ?, 3, 'job.leased', ?, ?, ? WHERE EXISTS
+        SELECT ?, ?, 'job', ?, ?, 'job.leased', ?, ?, ? WHERE EXISTS
         (SELECT 1 FROM runner_leases WHERE job_id = ? AND token_digest = ?)`).bind(
-        eventId, EVENT_SCHEMA_VERSION, candidate.job_id, eventPayload, eventPayloadSha256, now, candidate.job_id, tokenDigest,
+        eventId, EVENT_SCHEMA_VERSION, candidate.job_id, revision, eventPayload, eventPayloadSha256, now, candidate.job_id, tokenDigest,
       ),
     ])
     const persisted = await this.database.prepare(`SELECT generation FROM runner_leases WHERE job_id = ? AND runner_id = ? AND token_digest = ?`)
@@ -1396,6 +1410,30 @@ class D1InvocationStore implements InvocationStore {
     return result.meta.changes === 1
   }
 
+  async releaseLease(input: LeaseInput): Promise<boolean> {
+    const now = new Date().toISOString()
+    const tokenDigest = await sha256(input.leaseToken)
+    const valid = await this.database.prepare(`SELECT 1 FROM jobs j JOIN runner_leases l ON l.job_id = j.job_id
+      WHERE j.job_id = ? AND j.state = 'leased' AND l.runner_id = ? AND l.token_digest = ? AND l.expires_at > ?`).bind(
+      input.jobId, input.runnerId, tokenDigest, now,
+    ).first()
+    if (!valid) return false
+    const payload = canonicalJson({ jobId: input.jobId, runnerId: input.runnerId, reason: 'checkout_unavailable' })
+    const revision = await this.nextJobRevision(input.jobId)
+    await this.database.batch([
+      this.database.prepare(`UPDATE jobs SET state = 'pending' WHERE job_id = ? AND state = 'leased'
+        AND EXISTS (SELECT 1 FROM runner_leases WHERE job_id = ? AND runner_id = ? AND token_digest = ? AND expires_at > ?)`).bind(
+        input.jobId, input.jobId, input.runnerId, tokenDigest, now,
+      ),
+      this.database.prepare(`DELETE FROM runner_leases WHERE job_id = ? AND runner_id = ? AND token_digest = ?`).bind(input.jobId, input.runnerId, tokenDigest),
+      this.database.prepare(`INSERT INTO domain_events (event_id, schema_version, stream_kind, stream_id, revision, event_type, payload_json, payload_sha256, created_at)
+        SELECT ?, ?, 'job', ?, ?, 'job.lease_released', ?, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'pending')`).bind(
+        opaqueId('evt'), EVENT_SCHEMA_VERSION, input.jobId, revision, payload, await sha256(payload), now, input.jobId,
+      ),
+    ])
+    return (await this.database.prepare('SELECT state FROM jobs WHERE job_id = ?').bind(input.jobId).first<{ state: string }>())?.state === 'pending'
+  }
+
   async completeLease(input: LeaseInput & { artifact: AnalysisArtifact; cleanupStatus: 'verified' | 'failed' }): Promise<'accepted' | 'invalid_artifact'> {
     const artifactJson = canonicalJson(input.artifact)
     if (new TextEncoder().encode(artifactJson).byteLength > 512 * 1024) return 'invalid_artifact'
@@ -1408,6 +1446,7 @@ class D1InvocationStore implements InvocationStore {
     if (!validLease) return 'invalid_artifact'
     const eventPayload = canonicalJson({ jobId: input.jobId, result: input.artifact.kind })
     const eventPayloadSha256 = await sha256(eventPayload)
+    const revision = await this.nextJobRevision(input.jobId)
     await this.database.batch([
       this.database.prepare(`UPDATE jobs SET state = 'succeeded', execution_status = 'succeeded', execution_completed_at = ?, cleanup_status = ?, cleanup_updated_at = ?
         WHERE job_id = ? AND state = 'leased' AND EXISTS (SELECT 1 FROM runner_leases
@@ -1418,10 +1457,10 @@ class D1InvocationStore implements InvocationStore {
         SELECT ?, 1, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'succeeded')
         ON CONFLICT(job_id) DO NOTHING`).bind(input.jobId, artifactJson, now, input.jobId),
       this.database.prepare(`INSERT INTO domain_events (event_id, schema_version, stream_kind, stream_id, revision, event_type, payload_json, payload_sha256, created_at)
-        SELECT ?, ?, 'job', ?, 4, 'job.succeeded', ?, ?, ? WHERE EXISTS
+        SELECT ?, ?, 'job', ?, ?, 'job.succeeded', ?, ?, ? WHERE EXISTS
         (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'succeeded')
         ON CONFLICT(stream_kind, stream_id, revision) DO NOTHING`).bind(
-        opaqueId('evt'), EVENT_SCHEMA_VERSION, input.jobId, eventPayload, eventPayloadSha256, now, input.jobId,
+        opaqueId('evt'), EVENT_SCHEMA_VERSION, input.jobId, revision, eventPayload, eventPayloadSha256, now, input.jobId,
       ),
       this.database.prepare(`UPDATE ornn_messages SET revision = revision + 1, latest_attempt = 'pending', updated_at = ?
         WHERE job_id = ? AND EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'succeeded')`).bind(now, input.jobId, input.jobId),
@@ -1434,5 +1473,11 @@ class D1InvocationStore implements InvocationStore {
   async recordMessagePublication(jobId: string, update: { githubCommentId?: string; attempt: OrnnMessageState['latestAttempt'] }): Promise<void> {
     await this.database.prepare(`UPDATE ornn_messages SET github_comment_id = COALESCE(?, github_comment_id), latest_attempt = ?, updated_at = ?
       WHERE job_id = ?`).bind(update.githubCommentId ?? null, update.attempt, new Date().toISOString(), jobId).run()
+  }
+
+  private async nextJobRevision(jobId: string): Promise<number> {
+    const row = await this.database.prepare(`SELECT COALESCE(MAX(revision), 0) + 1 AS revision
+      FROM domain_events WHERE stream_kind = 'job' AND stream_id = ?`).bind(jobId).first<{ revision: number }>()
+    return row?.revision ?? 1
   }
 }

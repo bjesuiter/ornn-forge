@@ -303,9 +303,15 @@ test('leases one pending Job to its authenticated Runner and records its fixture
 })
 
 test('keeps a completed Job reserved when the Runner cannot verify Docker cleanup', async () => {
+  const messages: string[] = []
   const app = createControlPlane({
     store: createInMemoryInvocationStore(), githubWebhookSecret: webhookSecret, githubInstallationId: '42', githubRepositoryId: '99',
     operatorBearerSecret: operatorSecret, runnerCredentialId: 'runner_homeserv1', runnerCredentialSecret: 'r'.repeat(32),
+    messagePublisher: {
+      async reconcile() { return undefined },
+      async create(input) { messages.push(input.body); return { githubCommentId: '17' } },
+      async update(input) { messages.push(input.body) },
+    },
   })
   const request = (type: string, payload: Record<string, unknown>) => new Request(`https://ornn.example/api/v1/runner/${type}`, {
     method: 'POST', headers: { authorization: `Bearer ${'r'.repeat(32)}`, 'content-type': 'application/json', 'x-ornn-runner-id': 'runner_homeserv1' },
@@ -322,8 +328,29 @@ test('keeps a completed Job reserved when the Runner cannot verify Docker cleanu
   expect(result.status).toBe(200)
   const inspected = await app.fetch(new Request(`https://ornn.example/api/v1/jobs/${jobId}`, { headers: { authorization: `Bearer ${operatorSecret}` } }))
   expect(await inspected.json()).toMatchObject({ job: { state: 'succeeded' }, executionOutcome: { status: 'succeeded' }, cleanupStatus: { status: 'failed' } })
+  expect(messages.at(-1)).toContain('Docker cleanup could not be verified')
   await app.fetch(await signedWebhookRequest('delivery-cleanup-reserved-capacity', issueComment()))
   expect(await (await app.fetch(request('poll', { runnerId: 'runner_homeserv1' }))).json()).toMatchObject({ type: 'runner.no_work' })
+})
+
+test('returns an unstarted lease to pending work without retaining its capacity', async () => {
+  const store = createInMemoryInvocationStore()
+  const app = createControlPlane({
+    store, githubWebhookSecret: webhookSecret, githubInstallationId: '42', githubRepositoryId: '99',
+    operatorBearerSecret: operatorSecret, runnerCredentialId: 'runner_homeserv1', runnerCredentialSecret: 'r'.repeat(32),
+  })
+  const request = (type: string, payload: Record<string, unknown>) => new Request(`https://ornn.example/api/v1/runner/${type}`, {
+    method: 'POST', headers: { authorization: `Bearer ${'r'.repeat(32)}`, 'content-type': 'application/json', 'x-ornn-runner-id': 'runner_homeserv1' },
+    body: JSON.stringify(envelope(`runner.${type}`, payload)),
+  })
+  const admitted = await app.fetch(await signedWebhookRequest('delivery-return-lease', issueComment()))
+  const { jobId } = await admitted.json() as { jobId: string }
+  const first = await (await app.fetch(request('poll', { runnerId: 'runner_homeserv1' }))).json() as { payload: { leaseToken: string } }
+
+  expect(await store.releaseLease?.({ runnerId: 'runner_homeserv1', jobId, leaseToken: first.payload.leaseToken })).toBe(true)
+  const second = await (await app.fetch(request('poll', { runnerId: 'runner_homeserv1' }))).json() as { payload: { jobId: string; leaseToken: string } }
+  expect(second.payload).toMatchObject({ jobId })
+  expect(second.payload.leaseToken).not.toBe(first.payload.leaseToken)
 })
 
 test('a paused Runner receives no new lease until an Operator resumes it', async () => {
