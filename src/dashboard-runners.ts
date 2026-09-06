@@ -84,8 +84,12 @@ type DashboardRunnerResultRow = {
   execution_completed_at: string
 }
 
+export type DashboardRunnerDatabase = {
+  prepare(query: string): { all<T>(): Promise<{ results: T[] }> }
+}
+
 export async function listDashboardRunners(
-  database: D1Database,
+  database: DashboardRunnerDatabase,
   now = new Date(),
 ): Promise<DashboardRunner[]> {
   const onlineSince = new Date(now.getTime() - onlineWindowMs).toISOString()

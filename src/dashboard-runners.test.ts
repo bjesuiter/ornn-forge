@@ -1,5 +1,16 @@
 import { expect, test } from 'bun:test'
-import { dashboardRunnersFromRows } from './dashboard-runners'
+import { Database } from 'bun:sqlite'
+import { readFileSync } from 'node:fs'
+import { dashboardRunnersFromRows, listDashboardRunners, type DashboardRunnerDatabase } from './dashboard-runners'
+
+const migrations = [
+  '0001_admit_analyze_invocation.sql',
+  '0002_fixture_runner.sql',
+  '0005_record_runner_presence.sql',
+  '0006_pause_runners.sql',
+  '0007_record_runner_diagnostics.sql',
+  '0008_create_remote_runner_identities.sql',
+].map((name) => readFileSync(new URL(`../migrations/${name}`, import.meta.url), 'utf8'))
 
 test('the dashboard keeps runner presence, pause, faults, capacity, and work as independent dimensions', () => {
   const runners = dashboardRunnersFromRows([
@@ -72,3 +83,32 @@ test('the dashboard keeps runner presence, pause, faults, capacity, and work as 
     }],
   }])
 })
+
+test('the dashboard query keeps enrollment, readiness, and presence separate', async () => {
+  const database = new Database(':memory:')
+  for (const migration of migrations) database.exec(migration)
+  database.run(`INSERT INTO remote_runners VALUES
+    ('runner_awaiting', 'remote', 2, 'awaiting_setup', 'not_ready', '2026-09-06T12:00:00.000Z'),
+    ('runner_enrolled', 'remote', 3, 'enrolled', 'ready', '2026-09-06T12:00:00.000Z')`)
+  database.run("INSERT INTO runner_credentials VALUES ('runner_enrolled', 'digest-only', '2026-09-06T12:00:00.000Z')")
+  database.run("INSERT INTO runner_presence VALUES ('runner_enrolled', '2026-09-06T12:00:00.000Z')")
+
+  const runners = await listDashboardRunners(sqliteDashboardDatabase(database), new Date('2026-09-06T12:00:05.000Z'))
+
+  expect(runners.map(({ id, enrollment, ready, online, desiredCapacity }) => ({ id, enrollment, ready, online, desiredCapacity }))).toEqual([
+    { id: 'runner_awaiting', enrollment: 'awaiting_setup', ready: false, online: false, desiredCapacity: 2 },
+    { id: 'runner_enrolled', enrollment: 'enrolled', ready: true, online: true, desiredCapacity: 3 },
+  ])
+})
+
+function sqliteDashboardDatabase(database: Database): DashboardRunnerDatabase {
+  return {
+    prepare(query) {
+      return {
+        async all<T>() {
+          return { results: database.query(query).all() as T[] }
+        },
+      }
+    },
+  }
+}

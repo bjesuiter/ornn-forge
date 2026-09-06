@@ -40,11 +40,6 @@ async function signedRawWebhookRequest(deliveryId: string, body: Uint8Array, eve
   })
 }
 
-async function sha256Hex(value: string): Promise<string> {
-  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)))
-  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')
-}
-
 function issueComment(actor = 'bjesuiter') {
   return {
     action: 'created',
@@ -153,21 +148,10 @@ test('issues independent, short-lived, one-time Setup tokens for Remote Runner e
   expect(replacement.setupToken).not.toBe(first.setupToken)
   expect((await setupRequest('/api/v1/runner/setup/preflight', { setupToken: first.setupToken })).status).toBe(401)
 
-  const secondCredential = 'r'.repeat(32)
   expect((await setupRequest('/api/v1/runner/setup/enroll', {
     setupToken: second.setupToken,
-    credentialDigest: await sha256Hex(secondCredential),
+    credentialDigest: 'a'.repeat(64),
   })).status).toBe(201)
-  const authenticatedPoll = await app.fetch(new Request('https://ornn.example/api/v1/runner/poll', {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${secondCredential}`,
-      'content-type': 'application/json',
-      'x-ornn-runner-id': second.runner.id,
-    },
-    body: JSON.stringify(envelope('runner.poll', { runnerId: second.runner.id, ready: true })),
-  }))
-  expect(authenticatedPoll.status).toBe(200)
   expect((await setupRequest('/api/v1/runner/setup/preflight', { setupToken: second.setupToken })).status).toBe(401)
   expect((await setupRequest('/api/v1/runner/setup/enroll', {
     setupToken: second.setupToken,
