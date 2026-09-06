@@ -39,6 +39,7 @@ services:
       DOCKER_HOST: unix:///var/run/docker.sock
       ORNN_CONTROL_PLANE_URL: ${ORNN_CONTROL_PLANE_URL:?Set the local control-plane URL.}
       ORNN_RUNNER_CREDENTIAL_FILE: /run/secrets/runner_credential
+      ORNN_RUNNER_EXECUTOR: fixture
       ORNN_RUNNER_ID: ${ORNN_RUNNER_ID:?Set a development Runner ID.}
     secrets:
       - runner_credential

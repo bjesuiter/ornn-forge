@@ -157,6 +157,12 @@ The debug Runner keeps a reconnecting fixture control connection:
 bun run runner:debug -- --root run --rm runner
 ```
 
+Stop the background debug service and remove only its local Compose state with:
+
+```sh
+bun run runner:debug -- down --volumes
+```
+
 The launcher uses only the active Docker context's Unix socket and refuses TCP,
 SSH, or unavailable endpoints. Compose turns the Varlock-provided value into an
 in-memory Docker secret mounted only at `/run/secrets/runner_credential`; it is
