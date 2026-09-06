@@ -11,6 +11,7 @@
     "env:ops": "DEV_ENV=ops varlock load",
     "deploy": "DEV_ENV=ops varlock run -- scripts/deploy",
     "runner:debug": "DEV_ENV=runner-debug bunx varlock run -- scripts/runner-debug",
+    "runner:setup": "DEV_ENV=runner-debug bunx varlock run -- bun apps/runner/src/setup-debug.ts",
     "cf-typegen": "wrangler types",
     "test": "bun test",
     "runner:fixture": "bun run --filter @ornn-forge/runner fixture",

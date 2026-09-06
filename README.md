@@ -95,20 +95,24 @@ inspects the created pending Job through the deployed Worker.
 
 ## Local Runner debug container
 
-The Runner can be exercised locally without installing Bun or the Runner on the
+The Runner can be enrolled locally without installing Bun or the Runner on the
 host. It is a development test harness, not a `homeserv1` deployment. Start
-OrbStack (macOS) or the local Docker Engine (Linux), then store the Runner
-transport credential in macOS Keychain:
+OrbStack (macOS) or the local Docker Engine (Linux), then enroll a Runner with
+the one-time Setup token shown by the Control Plane:
 
 ```sh
-bunx varlock keychain set ORNN_RUNNER_CREDENTIAL --project ornn-forge --profile runner-debug --write-to .env.runner-debug
+bun run runner:setup
 ```
 
-That command creates a portable Keychain resolver in
-[`.env.runner-debug`](.env.runner-debug); it does not create a persistent
-credential file. The launcher creates a mode-`0600` temporary file only while
-Compose creates the Docker secret, then removes it.
-Run the current one-shot Fixture Runner with:
+Setup prompts without echoing the token, preflights it before creating a
+credential, then sends only the credential's SHA-256 digest to the Control
+Plane. It stores the raw credential in macOS Keychain through Varlock and writes
+the public Runner ID to [`.env.runner-debug`](.env.runner-debug); neither is
+written to shell history. The authenticated Runner startup and control-connection
+sync are tracked in [#49](https://github.com/bjesuiter/ornn-forge/issues/49).
+
+The existing one-shot Fixture Runner can still be run with a separately
+configured fixture identity:
 
 ```sh
 bun run runner:debug -- --root run --rm runner

@@ -757,8 +757,9 @@ export function createInMemoryInvocationStore(): InvocationStore {
     },
     async enrollRemoteRunner(input) {
       const token = setupTokensByDigest.get(input.tokenDigest)
+      const runner = token ? remoteRunners.get(token.runnerId) : undefined
+      if (token?.consumedAt && runner?.enrollment === 'enrolled' && runnerCredentials.get(runner.id) === input.credentialDigest) return runner
       if (!usableSetupToken(token, input.now)) return undefined
-      const runner = remoteRunners.get(token.runnerId)
       if (!runner || runner.enrollment !== 'awaiting_setup' || runnerCredentials.has(runner.id)) return undefined
       runnerCredentials.set(runner.id, input.credentialDigest)
       token.consumedAt = input.now
@@ -1117,7 +1118,7 @@ class D1InvocationStore implements InvocationStore {
   }
 
   async enrollRemoteRunner(input: SetupTokenEnrollment): Promise<RemoteRunner | undefined> {
-    const results = await this.database.batch([
+    await this.database.batch([
       this.database.prepare(`INSERT INTO runner_credentials (runner_id, credential_digest, created_at)
         SELECT token.runner_id, ?, ? FROM runner_setup_tokens token
         JOIN remote_runners runner ON runner.runner_id = token.runner_id
@@ -1135,13 +1136,13 @@ class D1InvocationStore implements InvocationStore {
             WHERE credential.runner_id = remote_runners.runner_id AND credential.credential_digest = ?)`)
         .bind(input.tokenDigest, input.now, input.credentialDigest),
     ])
-    if (results[1]?.meta.changes !== 1) return undefined
     const row = await this.database.prepare(`SELECT runner.runner_id, runner.desired_capacity,
       runner.enrollment_state, runner.readiness_state FROM remote_runners runner
       JOIN runner_setup_tokens token ON token.runner_id = runner.runner_id
       JOIN runner_credentials credential ON credential.runner_id = runner.runner_id
-      WHERE token.token_digest = ? AND token.consumed_at = ? AND credential.credential_digest = ?`)
-      .bind(input.tokenDigest, input.now, input.credentialDigest).first<RemoteRunnerRow>()
+      WHERE token.token_digest = ? AND token.consumed_at IS NOT NULL
+        AND runner.enrollment_state = 'enrolled' AND credential.credential_digest = ?`)
+      .bind(input.tokenDigest, input.credentialDigest).first<RemoteRunnerRow>()
     return row ? remoteRunnerFromRow(row) : undefined
   }
 

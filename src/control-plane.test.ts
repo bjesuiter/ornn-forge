@@ -152,6 +152,10 @@ test('issues independent, short-lived, one-time Setup tokens for Remote Runner e
     setupToken: second.setupToken,
     credentialDigest: 'a'.repeat(64),
   })).status).toBe(201)
+  expect((await setupRequest('/api/v1/runner/setup/enroll', {
+    setupToken: second.setupToken,
+    credentialDigest: 'a'.repeat(64),
+  })).status).toBe(201)
   expect((await setupRequest('/api/v1/runner/setup/preflight', { setupToken: second.setupToken })).status).toBe(401)
   expect((await setupRequest('/api/v1/runner/setup/enroll', {
     setupToken: second.setupToken,
