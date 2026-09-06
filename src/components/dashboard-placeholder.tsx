@@ -1,24 +1,35 @@
 import { useState } from 'react'
 import type { DashboardRunner } from '../dashboard-runners'
 import type { DashboardWebhook } from '../dashboard-webhooks'
+import type { OpenAiSubscriptionUsage } from '../openai-subscription-usage'
 import './forge-designs.css'
 
 export function Dashboard({
+  openAiUsage,
   runners,
   webhooks,
   onSignOut,
   onSetRunnerPaused,
+  onStartOpenAiSubscriptionAuthorization,
+  onCompleteOpenAiSubscriptionAuthorization,
+  onDisconnectOpenAiSubscription,
 }: {
+  openAiUsage: OpenAiSubscriptionUsage
   runners: DashboardRunner[]
   webhooks: DashboardWebhook[]
   onSignOut: () => Promise<void>
   onSetRunnerPaused: (runnerId: string, paused: boolean) => Promise<void>
+  onStartOpenAiSubscriptionAuthorization: () => Promise<void>
+  onCompleteOpenAiSubscriptionAuthorization: () => Promise<void>
+  onDisconnectOpenAiSubscription: () => Promise<void>
 }) {
   const [signingOut, setSigningOut] = useState(false)
   const [error, setError] = useState(false)
   const [updatingRunnerId, setUpdatingRunnerId] = useState<string>()
   const [runnerError, setRunnerError] = useState(false)
   const [showAllWebhooks, setShowAllWebhooks] = useState(false)
+  const [updatingOpenAiSubscription, setUpdatingOpenAiSubscription] = useState(false)
+  const [openAiSubscriptionError, setOpenAiSubscriptionError] = useState(false)
 
   async function signOut() {
     setSigningOut(true)
@@ -41,6 +52,18 @@ export function Dashboard({
       setRunnerError(true)
     } finally {
       setUpdatingRunnerId(undefined)
+    }
+  }
+
+  async function updateOpenAiSubscription(action: () => Promise<void>) {
+    setUpdatingOpenAiSubscription(true)
+    setOpenAiSubscriptionError(false)
+    try {
+      await action()
+    } catch {
+      setOpenAiSubscriptionError(true)
+    } finally {
+      setUpdatingOpenAiSubscription(false)
     }
   }
 
@@ -80,6 +103,64 @@ export function Dashboard({
             Runner-Status konnte nicht geändert werden. Bitte versuche es erneut.
           </p>
         )}
+        <section className="fd-openai-usage" aria-labelledby="fd-openai-usage-title">
+          <div className="fd-openai-usage-heading">
+            <div>
+              <p className="fd-kicker">Außerhalb von Ornn Forge</p>
+              <h2 id="fd-openai-usage-title">OpenAI-Abo</h2>
+            </div>
+            {openAiUsage.status === 'available' && (
+              <div className="fd-openai-usage-status">
+                <p className="fd-openai-usage-plan">{openAiUsage.plan ? formatPlan(openAiUsage.plan) : 'ChatGPT'}</p>
+                {openAiUsage.credits !== undefined && <p className="fd-openai-usage-credits">{formatCredits(openAiUsage.credits)} Credits</p>}
+              </div>
+            )}
+          </div>
+          {openAiUsage.status === 'available' ? (
+            <>
+              <ul className="fd-openai-usage-list">
+                {openAiUsage.windows.map((window) => (
+                  <li key={window.label}>
+                    <div className="fd-openai-usage-window">
+                      <span>{window.label}</span>
+                      <strong>{formatPercent(100 - window.usedPercent)} frei</strong>
+                    </div>
+                    <div className="fd-openai-usage-track" aria-label={`${window.label}: ${formatPercent(100 - window.usedPercent)} frei`}>
+                      <span style={{ width: `${window.usedPercent}%` }} />
+                    </div>
+                    <small>{window.resetsAt ? `Zurückgesetzt ${dateTime(window.resetsAt)}` : 'Zeitpunkt zum Zurücksetzen nicht verfügbar'}</small>
+                  </li>
+                ))}
+              </ul>
+              <div className="fd-openai-usage-footer">
+                <p className="fd-openai-usage-note">Zuletzt geprüft {relativeTime(openAiUsage.checkedAt)}. Diese Anzeige gehört nicht zum Runner-Status.</p>
+                <button className="fd-openai-usage-action" type="button" disabled={updatingOpenAiSubscription} onClick={() => void updateOpenAiSubscription(onDisconnectOpenAiSubscription)}>
+                  Verbindung trennen
+                </button>
+              </div>
+            </>
+          ) : openAiUsage.status === 'connecting' ? (
+            <div className="fd-openai-usage-connection">
+              <p>Öffne <a href={openAiUsage.verificationUri} target="_blank" rel="noreferrer">OpenAI verbinden</a> und bestätige den Code <strong>{openAiUsage.userCode}</strong>.</p>
+              <p className="fd-openai-usage-note">Der Code ist bis {dateTime(openAiUsage.expiresAt)} gültig. Das Dashboard erhält keine Tokens.</p>
+              <button className="fd-openai-usage-action" type="button" disabled={updatingOpenAiSubscription} onClick={() => void updateOpenAiSubscription(onCompleteOpenAiSubscriptionAuthorization)}>
+                {updatingOpenAiSubscription ? 'Prüft …' : 'Verbindung prüfen'}
+              </button>
+            </div>
+          ) : (
+            <div className="fd-openai-usage-connection">
+              <p className="fd-openai-usage-unavailable">
+                {openAiUsage.reason === 'not_connected'
+                  ? 'Das OpenAI-Abo ist noch nicht mit dieser Control Plane verbunden.'
+                  : 'Der letzte Usage-Refresh war nicht erfolgreich.'}
+              </p>
+              <button className="fd-openai-usage-action" type="button" disabled={updatingOpenAiSubscription} onClick={() => void updateOpenAiSubscription(onStartOpenAiSubscriptionAuthorization)}>
+                {updatingOpenAiSubscription ? 'Startet …' : 'OpenAI verbinden'}
+              </button>
+            </div>
+          )}
+          {openAiSubscriptionError && <p className="fd-error fd-openai-usage-error" role="alert">OpenAI-Verbindung konnte nicht geändert werden. Bitte erneut versuchen.</p>}
+        </section>
         <section className="fd-webhook-history" aria-labelledby="fd-webhook-title">
           <div className="fd-webhook-heading">
             <div>
@@ -285,4 +366,16 @@ function elapsed(startedAt: string, endedAt = new Date().toISOString()) {
   if (seconds < 60) return `${seconds} s`
   const minutes = Math.floor(seconds / 60)
   return `${minutes} min ${seconds % 60} s`
+}
+
+function formatPercent(value: number) {
+  return new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 }).format(value) + ' %'
+}
+
+function formatPlan(value: string) {
+  return value.replace(/(^|[_-])(\w)/g, (_, separator: string, character: string) => `${separator}${character.toUpperCase()}`)
+}
+
+function formatCredits(value: number) {
+  return new Intl.NumberFormat('de-DE', { maximumFractionDigits: 2 }).format(value)
 }

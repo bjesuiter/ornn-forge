@@ -44,6 +44,44 @@ wrangler secret put GITHUB_APP_ID
 wrangler secret put GITHUB_APP_PRIVATE_KEY < /secure/path/to/github-app-private-key.pem
 ```
 
+## OpenAI subscription usage in the dashboard
+
+The dashboard can show the remaining five-hour and weekly allowance for the
+Operator's ChatGPT subscription without consulting a Runner or a local machine.
+It has a deliberately separate, telemetry-only OAuth connection; it cannot be
+used for Runner work, sandboxes, or OpenAI Platform API calls.
+
+Create an account-level Cloudflare Secrets Store secret containing a random
+256-bit base64url value. Do not use `--value`, which leaves a secret in shell
+history:
+
+```sh
+wrangler secrets-store store create ornn-forge-secrets --remote
+wrangler secrets-store secret create STORE_ID --name ORNN_D1_SECRETS_ENCRYPTION_KEY --scopes workers --remote
+```
+
+At the value prompt, paste the output of `openssl rand -base64 32 | tr '+/'
+'-_' | tr -d '='`. Bind that secret to the Worker as
+`ORNN_D1_SECRETS_ENCRYPTION_KEY` (Worker Settings → Bindings → Secrets Store),
+using the `STORE_ID` returned above and the same secret name. The binding is
+intentionally not committed because its store ID is account-specific.
+
+After deploy, open the authenticated dashboard, choose **OpenAI verbinden**,
+open the displayed OpenAI link, and enter the displayed one-time code. The
+browser never receives OAuth tokens. The Worker encrypts them with the Secrets
+Store key before storing the rotating record in D1. The one-minute refresh stores
+only plan, credits when provided, five-hour/weekly percentage, reset timestamps,
+and check time; neither account ID nor raw OpenAI response reaches D1, the
+browser, or logs. **Verbindung trennen** removes the ciphertext and snapshot.
+
+This uses the same ChatGPT/Codex subscription endpoint approached by Codex
+clients, rather than the documented Platform API usage endpoint. Treat it as a
+best-effort integration that may require reauthorization or an update if OpenAI
+changes that endpoint. OpenAI documents ChatGPT sign-in and device-code auth
+for Codex clients, and advises treating the resulting auth cache like a password.
+The resulting credential boundary is recorded in
+[ADR 0008](docs/adr/0008-centralize-openai-subscription-usage.md).
+
 Deploy with one command:
 
 ```sh

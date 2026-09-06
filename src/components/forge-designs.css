@@ -1263,6 +1263,127 @@
   max-width: 1240px;
   padding-top: clamp(48px, 10vw, 108px);
 }
+.fd-openai-usage {
+  max-width: 940px;
+  margin-bottom: clamp(56px, 9vw, 100px);
+  padding-bottom: 28px;
+  border-bottom: 1px solid var(--line);
+}
+.fd-openai-usage-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 20px;
+}
+.fd-openai-usage-heading .fd-kicker {
+  margin-bottom: 8px;
+}
+.fd-openai-usage-heading h2 {
+  font: 500 clamp(28px, 3vw, 38px)/1 var(--display);
+  letter-spacing: -0.035em;
+}
+.fd-openai-usage-plan {
+  color: var(--accent);
+  font-size: 12px !important;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.fd-openai-usage-status {
+  text-align: right;
+}
+.fd-openai-usage-credits {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 11px !important;
+}
+.fd-openai-usage-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  list-style: none;
+  margin: 28px 0 0;
+  padding: 0;
+}
+.fd-openai-usage-window {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+}
+.fd-openai-usage-window strong {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.fd-openai-usage-track {
+  height: 5px;
+  overflow: hidden;
+  margin-top: 12px;
+  background: var(--surface);
+  border-radius: 999px;
+}
+.fd-openai-usage-track > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+}
+.fd-openai-usage-list small,
+.fd-openai-usage-note,
+.fd-openai-usage-unavailable {
+  color: var(--muted);
+  font-size: 11px !important;
+}
+.fd-openai-usage-list small {
+  display: block;
+  margin-top: 7px;
+}
+.fd-openai-usage-note,
+.fd-openai-usage-unavailable {
+  margin-top: 20px;
+}
+.fd-openai-usage-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.fd-openai-usage-footer .fd-openai-usage-note {
+  margin-bottom: 0;
+}
+.fd-openai-usage-connection {
+  margin-top: 22px;
+  max-width: 620px;
+}
+.fd-openai-usage-connection p {
+  font-size: 13px !important;
+}
+.fd-openai-usage-connection strong {
+  color: var(--accent);
+  letter-spacing: 0.08em;
+}
+.fd-openai-usage-connection a {
+  color: var(--accent);
+}
+.fd-openai-usage-action {
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  padding: 9px 12px;
+  color: var(--ink);
+  background: transparent;
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.fd-openai-usage-action:disabled {
+  opacity: 0.55;
+}
+.fd-openai-usage-error {
+  margin-top: 16px;
+}
 .fd-webhook-history {
   max-width: 940px;
   margin-bottom: clamp(56px, 9vw, 100px);
@@ -1524,6 +1645,9 @@
   padding: 28px 0;
 }
 @media (max-width: 600px) {
+  .fd-openai-usage { margin-bottom: 58px; }
+  .fd-openai-usage-heading { align-items: start; flex-direction: column; gap: 8px; }
+  .fd-openai-usage-list { grid-template-columns: 1fr; gap: 20px; }
   .fd-webhook-history { margin-bottom: 58px; }
   .fd-webhook-heading { align-items: start; flex-direction: column; gap: 8px; }
   .fd-webhook-count { text-align: left; }

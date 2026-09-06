@@ -9,6 +9,7 @@ const runnerPausesMigration = readFileSync(new URL('../migrations/0006_pause_run
 const runnerDiagnosticsMigration = readFileSync(new URL('../migrations/0007_record_runner_diagnostics.sql', import.meta.url), 'utf8')
 const remoteRunnersMigration = readFileSync(new URL('../migrations/0008_create_remote_runner_identities.sql', import.meta.url), 'utf8')
 const runnerControlMigration = readFileSync(new URL('../migrations/0009_persist_runner_control_state.sql', import.meta.url), 'utf8')
+const openAiSubscriptionMigration = readFileSync(new URL('../migrations/0010_add_openai_subscription_usage.sql', import.meta.url), 'utf8')
 
 test('the admission migration creates immutable provenance and append-only events', () => {
   const database = new Database(':memory:')
@@ -26,6 +27,20 @@ test('the admission migration creates immutable provenance and append-only event
     .toThrow('invocations are immutable')
   expect(() => database.run("DELETE FROM domain_events WHERE event_id = 'evt_v1_a'"))
     .toThrow('domain_events are append-only')
+})
+
+test('the OpenAI subscription migration leaves raw credentials and account identifiers out of D1', () => {
+  const database = new Database(':memory:')
+  database.exec(openAiSubscriptionMigration)
+  const credentialColumns = database.query("SELECT name FROM pragma_table_info('openai_subscription_credentials')").all() as Array<{ name: string }>
+  const snapshotColumns = database.query("SELECT name FROM pragma_table_info('openai_subscription_usage_snapshot')").all() as Array<{ name: string }>
+  const deviceAuthorizationColumns = database.query("SELECT name FROM pragma_table_info('openai_subscription_device_authorizations')").all() as Array<{ name: string }>
+
+  expect(credentialColumns.map(({ name }) => name)).toEqual(['singleton', 'encrypted_record', 'updated_at'])
+  expect(snapshotColumns.map(({ name }) => name)).not.toContain('account_id')
+  expect(snapshotColumns.map(({ name }) => name)).not.toContain('raw_response')
+  expect(deviceAuthorizationColumns.map(({ name }) => name)).not.toContain('access_token')
+  expect(deviceAuthorizationColumns.map(({ name }) => name)).not.toContain('refresh_token')
 })
 
 test('the fixture Runner migration stores only credential and lease digests', () => {

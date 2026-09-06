@@ -15,5 +15,6 @@ declare namespace Cloudflare {
     DASHBOARD_OPERATOR_GITHUB_IDS: string
     GITHUB_CLIENT_ID: string
     GITHUB_CLIENT_SECRET: string
+    ORNN_D1_SECRETS_ENCRYPTION_KEY?: { get(): Promise<string | undefined> }
   }
 }

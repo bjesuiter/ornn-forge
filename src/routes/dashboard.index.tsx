@@ -2,12 +2,20 @@ import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import { useEffect } from 'react'
 import { authClient } from '../auth-client'
 import { Dashboard } from '../components/dashboard-placeholder'
-import { getDashboardRunners, getDashboardWebhooks, setDashboardRunnerPaused } from '../dashboard.functions'
+import {
+  completeDashboardOpenAiSubscriptionAuthorization,
+  disconnectDashboardOpenAiSubscription,
+  getDashboardOpenAiUsage,
+  getDashboardRunners,
+  getDashboardWebhooks,
+  setDashboardRunnerPaused,
+  startDashboardOpenAiSubscriptionAuthorization,
+} from '../dashboard.functions'
 
 export const Route = createFileRoute('/dashboard/')({
   loader: async () => {
-    const [runners, webhooks] = await Promise.all([getDashboardRunners(), getDashboardWebhooks()])
-    return { runners, webhooks }
+    const [openAiUsage, runners, webhooks] = await Promise.all([getDashboardOpenAiUsage(), getDashboardRunners(), getDashboardWebhooks()])
+    return { openAiUsage, runners, webhooks }
   },
   component: DashboardRoute,
 })
@@ -15,7 +23,7 @@ export const Route = createFileRoute('/dashboard/')({
 function DashboardRoute() {
   const navigate = useNavigate()
   const router = useRouter()
-  const { runners, webhooks } = Route.useLoaderData()
+  const { openAiUsage, runners, webhooks } = Route.useLoaderData()
 
   useEffect(() => {
     const refresh = window.setInterval(() => void router.invalidate(), 5_000)
@@ -36,5 +44,29 @@ function DashboardRoute() {
     await router.invalidate()
   }
 
-  return <Dashboard runners={runners} webhooks={webhooks} onSignOut={signOut} onSetRunnerPaused={setRunnerPaused} />
+  async function startOpenAiSubscriptionAuthorization() {
+    await startDashboardOpenAiSubscriptionAuthorization()
+    await router.invalidate()
+  }
+
+  async function completeOpenAiSubscriptionAuthorization() {
+    await completeDashboardOpenAiSubscriptionAuthorization()
+    await router.invalidate()
+  }
+
+  async function disconnectOpenAiSubscription() {
+    await disconnectDashboardOpenAiSubscription()
+    await router.invalidate()
+  }
+
+  return <Dashboard
+    openAiUsage={openAiUsage}
+    runners={runners}
+    webhooks={webhooks}
+    onSignOut={signOut}
+    onSetRunnerPaused={setRunnerPaused}
+    onStartOpenAiSubscriptionAuthorization={startOpenAiSubscriptionAuthorization}
+    onCompleteOpenAiSubscriptionAuthorization={completeOpenAiSubscriptionAuthorization}
+    onDisconnectOpenAiSubscription={disconnectOpenAiSubscription}
+  />
 }

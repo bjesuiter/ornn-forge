@@ -5,6 +5,12 @@ import { auth } from './auth.server'
 import { createD1InvocationStore } from './control-plane'
 import { listDashboardRunners } from './dashboard-runners'
 import { listDashboardWebhooks } from './dashboard-webhooks'
+import {
+  completeOpenAiSubscriptionAuthorization,
+  disconnectOpenAiSubscription,
+  getCachedOpenAiSubscriptionUsage,
+  startOpenAiSubscriptionAuthorization,
+} from './openai-subscription-usage'
 
 export const getDashboardRunners = createServerFn({ method: 'GET' }).handler(async () => {
   setResponseHeader('Cache-Control', 'no-store')
@@ -18,6 +24,31 @@ export const getDashboardWebhooks = createServerFn({ method: 'GET' }).handler(as
   const session = await auth.api.getSession({ headers: getRequestHeaders() })
   if (!session) throw new Error('Dashboard session required')
   return listDashboardWebhooks(env.ORNN_D1)
+})
+
+export const getDashboardOpenAiUsage = createServerFn({ method: 'GET' }).handler(async () => {
+  setResponseHeader('Cache-Control', 'no-store')
+  const session = await auth.api.getSession({ headers: getRequestHeaders() })
+  if (!session) throw new Error('Dashboard session required')
+  return getCachedOpenAiSubscriptionUsage(env.ORNN_D1)
+})
+
+export const startDashboardOpenAiSubscriptionAuthorization = createServerFn({ method: 'POST' }).handler(async () => {
+  const session = await auth.api.getSession({ headers: getRequestHeaders() })
+  if (!session) throw new Error('Dashboard session required')
+  return startOpenAiSubscriptionAuthorization({ database: env.ORNN_D1, encryptionKey: env.ORNN_D1_SECRETS_ENCRYPTION_KEY })
+})
+
+export const completeDashboardOpenAiSubscriptionAuthorization = createServerFn({ method: 'POST' }).handler(async () => {
+  const session = await auth.api.getSession({ headers: getRequestHeaders() })
+  if (!session) throw new Error('Dashboard session required')
+  return completeOpenAiSubscriptionAuthorization({ database: env.ORNN_D1, encryptionKey: env.ORNN_D1_SECRETS_ENCRYPTION_KEY })
+})
+
+export const disconnectDashboardOpenAiSubscription = createServerFn({ method: 'POST' }).handler(async () => {
+  const session = await auth.api.getSession({ headers: getRequestHeaders() })
+  if (!session) throw new Error('Dashboard session required')
+  await disconnectOpenAiSubscription(env.ORNN_D1)
 })
 
 export const setDashboardRunnerPaused = createServerFn({ method: 'POST' })

@@ -21,12 +21,19 @@
       "migrations_dir": "migrations"
     }
   ],
+  "secrets_store_secrets": [
+    {
+      "binding": "ORNN_D1_SECRETS_ENCRYPTION_KEY",
+      "store_id": "8b41c85a433549389a449aa43014ab88",
+      "secret_name": "ORNN_D1_SECRETS_ENCRYPTION_KEY"
+    }
+  ],
   "durable_objects": { "bindings": [{ "name": "RUNNER_CONNECTION", "class_name": "RunnerConnection" }] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RunnerConnection"] }],
   "observability": {
     "enabled": true
   },
   "triggers": {
-    "crons": ["0 0 * * *"]
+    "crons": ["* * * * *"]
   }
 }
