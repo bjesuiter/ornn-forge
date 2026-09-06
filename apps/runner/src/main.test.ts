@@ -54,15 +54,27 @@ test('the Docker fixture executes through the SandboxDriver and verifies cleanup
     image: 'busybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     driver: sandbox,
     now: () => '2026-09-07T12:00:00.000Z',
+    async importWorkspace(checkout, lease) {
+      expect(checkout.token).toBe('checkout-token')
+      expect(lease.providerRef).toBe('container-123')
+      calls.push('import:deadbeef')
+    },
   }, {
     jobId: 'job_v1_abcdefghijklmnopqrstuv', leaseToken: 'lease_v1_123', generation: 1, expiresAt: '2026-09-07T12:15:00.000Z',
     repository: { fullName: 'bjesuiter/ornn-forge' },
+    checkout: {
+      revision: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      archiveUrl: 'https://api.github.com/repos/bjesuiter/ornn-forge/tarball/deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      token: 'checkout-token',
+      expiresAt: '2026-09-07T12:15:00.000Z',
+    },
     workOrder: { issueNumber: 1, title: 'Fixture', body: '', comment: '@ornn' },
   }, new AbortController().signal)
 
   expect(completion).toMatchObject({ artifact: { schemaVersion: 1, kind: 'plan', summary: 'Fixture analysis complete' }, cleanupStatus: 'verified' })
   expect(calls).toEqual([
     'create:sandbox_v1_job_v1_abcdefghijklmnopqrstuv-1:busybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'import:deadbeef',
     "exec:sh -ceu printf '{\"kind\":\"plan\"}\\n' > /workspace/fixture-artifact.json",
     'collect:/workspace/fixture-artifact.json',
     'terminate:completed',

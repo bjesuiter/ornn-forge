@@ -8,6 +8,7 @@ import {
 } from '@ornn-forge/protocol'
 import { unlink } from 'node:fs/promises'
 import { createDockerCliGateway } from './docker-gateway'
+import { createRepositoryWorkspaceImporter, type RepositoryWorkspaceImporter } from './repository-workspace'
 import { createDockerSandboxDriver, type SandboxDriver } from './sandbox'
 
 export type RemoteRunnerConfig = {
@@ -111,7 +112,8 @@ function defaultLeaseExecutor(config: RemoteRunnerConfig): LeaseExecutor {
   if (config.profile.executor !== 'docker') return async () => ({ artifact: fixtureArtifact(), cleanupStatus: 'verified' })
   if (!config.sandboxImage) throw new Error('Docker Runner is missing its digest-pinned sandbox image')
   const driver = createDockerSandboxDriver({ gateway: createDockerCliGateway() })
-  return (lease, signal) => executeDockerFixture({ runnerId: config.runnerId, image: config.sandboxImage as string, driver }, lease, signal)
+  const importWorkspace = createRepositoryWorkspaceImporter()
+  return (lease, signal) => executeDockerFixture({ runnerId: config.runnerId, image: config.sandboxImage as string, driver, importWorkspace }, lease, signal)
 }
 
 export function reconnectDelay(attempt: number, random: () => number = Math.random): number {
@@ -305,7 +307,7 @@ function fixtureArtifact() {
 }
 
 export async function executeDockerFixture(
-  options: { runnerId: string; image: string; driver: SandboxDriver; now?: () => string },
+  options: { runnerId: string; image: string; driver: SandboxDriver; now?: () => string; importWorkspace?: RepositoryWorkspaceImporter },
   lease: LeaseGrant,
   signal: AbortSignal,
 ): Promise<{ artifact: ReturnType<typeof fixtureArtifact>; cleanupStatus: 'verified' | 'failed' }> {
@@ -322,6 +324,9 @@ export async function executeDockerFixture(
     resources: { memoryBytes: 128 * 1024 * 1024, pidsLimit: 64 },
   }, signal)
   try {
+    if (!lease.checkout) throw new Error('Docker execution requires a pinned repository checkout')
+    if (!options.importWorkspace) throw new Error('Docker execution is missing its repository workspace importer')
+    await options.importWorkspace(lease.checkout, sandbox, options.driver, signal)
     const result = await options.driver.exec(sandbox, { command: ['sh', '-ceu', "printf '{\"kind\":\"plan\"}\\n' > /workspace/fixture-artifact.json"] }, signal)
     if (result.exitCode !== 0) throw new Error('Docker fixture command failed')
     const files = await options.driver.collectArtifacts(sandbox, ['/workspace/fixture-artifact.json'])
