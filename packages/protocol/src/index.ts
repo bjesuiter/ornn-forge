@@ -17,7 +17,7 @@ export type RunnerProfile = {
 
 export type RunnerFault = { code: string }
 
-export type RunnerPoll = RunnerEnvelope<'runner.poll', { runnerId: string; profile?: RunnerProfile }>
+export type RunnerPoll = RunnerEnvelope<'runner.poll', { runnerId: string; profile?: RunnerProfile; ready?: boolean }>
 export type RunnerHeartbeat = RunnerEnvelope<'lease.heartbeat', {
   runnerId: string
   jobId: string

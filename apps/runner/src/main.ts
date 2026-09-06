@@ -5,6 +5,7 @@ export type RemoteRunnerConfig = {
   runnerId: string
   credential: string
   profile: RunnerProfile
+  ready: boolean
 }
 
 type HttpRequest = (input: URL, init?: RequestInit) => Promise<Response>
@@ -29,6 +30,7 @@ export async function remoteRunnerConfigFromEnvironment(
     controlPlaneUrl,
     runnerId,
     credential,
+    ready: environment.ORNN_RUNNER_READY === 'true',
     profile: {
       release: environment.ORNN_RUNNER_RELEASE ?? 'development',
       platform: process.platform,
@@ -45,7 +47,9 @@ export async function executeFixtureLease(
   request: HttpRequest = fetch,
 ): Promise<'idle' | 'completed'> {
   try {
-    const poll = await call(config, 'poll', envelope('runner.poll', { runnerId: config.runnerId, profile: config.profile }), request)
+    const poll = await call(config, 'poll', envelope('runner.poll', {
+      runnerId: config.runnerId, profile: config.profile, ready: config.ready,
+    }), request)
     const response = await poll.json() as RunnerResponse
     if (response.type === 'runner.no_work') return 'idle'
     if (response.type !== 'runner.lease') throw new Error(`Runner poll rejected: ${response.type}`)
