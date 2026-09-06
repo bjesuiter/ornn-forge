@@ -18,6 +18,7 @@ export const Route = createRootRoute({
         content: 'Deployable TanStack Start foundation for Ornn Forge.',
       },
     ],
+    links: [{ rel: 'icon', type: 'image/png', href: '/favicon.png' }],
   }),
   component: RootComponent,
 })
