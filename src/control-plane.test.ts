@@ -322,6 +322,7 @@ test('keeps a completed Job reserved when the Runner cannot verify Docker cleanu
   expect(result.status).toBe(200)
   const inspected = await app.fetch(new Request(`https://ornn.example/api/v1/jobs/${jobId}`, { headers: { authorization: `Bearer ${operatorSecret}` } }))
   expect(await inspected.json()).toMatchObject({ job: { state: 'succeeded' }, executionOutcome: { status: 'succeeded' }, cleanupStatus: { status: 'failed' } })
+  await app.fetch(await signedWebhookRequest('delivery-cleanup-reserved-capacity', issueComment()))
   expect(await (await app.fetch(request('poll', { runnerId: 'runner_homeserv1' }))).json()).toMatchObject({ type: 'runner.no_work' })
 })
 

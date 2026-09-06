@@ -894,7 +894,7 @@ export function createInMemoryInvocationStore(): InvocationStore {
         inspection.message.latestAttempt = 'pending'
       }
       inspection.events.push({ id: opaqueId('evt'), type: 'job.succeeded', revision: String(inspection.events.length + 1), occurredAt: inspection.executionOutcome.completedAt })
-      leasesByJob.delete(input.jobId)
+      if (input.cleanupStatus === 'verified') leasesByJob.delete(input.jobId)
       return 'accepted'
     },
     async recordRunnerSuccess() {},
