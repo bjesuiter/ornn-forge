@@ -18,7 +18,8 @@ wrangler d1 migrations apply ornn-forge --remote
 wrangler secret put GITHUB_WEBHOOK_SECRET
 wrangler secret put OPERATOR_BEARER_SECRET
 wrangler secret put ORNN_RUNNER_CREDENTIAL_SECRET
-wrangler secret put GITHUB_MESSAGE_TOKEN
+wrangler secret put GITHUB_APP_ID
+wrangler secret put GITHUB_APP_PRIVATE_KEY < /secure/path/to/github-app-private-key.pem
 ```
 
 Set `ORNN_RUNNER_CREDENTIAL_ID` as a non-secret Worker variable and provision the
@@ -32,10 +33,14 @@ ORNN_RUNNER_CREDENTIAL="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')" \
 bun run runner:fixture
 ```
 
-`GITHUB_MESSAGE_TOKEN` is a GitHub App installation token with issue-comment
-write access. Ornn records its opaque message ID, effect key, comment identity,
-and publication attempt in D1; a retry reconciles the known comment before it
-edits and does not create another message.
+`GITHUB_APP_ID` is the GitHub App ID from the App settings page, not its OAuth
+client ID. `GITHUB_APP_PRIVATE_KEY` is a private key generated in the App's
+**Private keys** section, not an OAuth client secret. For each control-plane
+request that publishes an Ornn message, the Worker signs an App JWT, exchanges
+it for a repository-scoped installation token with `issues: write`, and uses
+that short-lived token to call GitHub. Ornn records its opaque message ID,
+effect key, comment identity, and publication attempt in D1; a retry finds the
+known message before it edits and does not create another message.
 
 `OPERATOR_BEARER_SECRET` is a 256-bit secret, supplied either as 32 raw bytes or
 as a 43-character base64url value. Generate the latter with:

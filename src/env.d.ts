@@ -8,6 +8,7 @@ declare namespace Cloudflare {
     OPERATOR_BEARER_SECRET: string
     ORNN_RUNNER_CREDENTIAL_ID: string
     ORNN_RUNNER_CREDENTIAL_SECRET: string
-    GITHUB_MESSAGE_TOKEN: string
+    GITHUB_APP_ID: string
+    GITHUB_APP_PRIVATE_KEY: string
   }
 }
