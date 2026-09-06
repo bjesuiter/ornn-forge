@@ -32,7 +32,7 @@ test('the Docker fixture executes through the SandboxDriver and verifies cleanup
   const sandbox: SandboxDriver = {
     async create(spec) {
       calls.push(`create:${spec.sandboxId}:${spec.image}`)
-      return { ...spec, providerRef: 'container-123' }
+      return { ...spec, providerRef: 'container-123', volumeIds: [] }
     },
     async discover() { return [] },
     async inspect() { return { state: 'absent', observedAt: '2026-09-07T12:00:00.000Z' } },

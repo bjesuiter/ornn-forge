@@ -30,9 +30,10 @@ export type SandboxLease = {
   specFingerprint: string
   createdAt: string
   expiresAt: string
+  volumeIds: string[]
 }
 
-export type SandboxSpec = Omit<SandboxLease, 'providerRef'> & {
+export type SandboxSpec = Omit<SandboxLease, 'providerRef' | 'volumeIds'> & {
   image: string
   command: string[]
   resources: { memoryBytes: number; pidsLimit: number }
@@ -99,17 +100,25 @@ export function createDockerSandboxDriver(options: { gateway: DockerGateway; now
       const labels = ownershipLabels(spec)
       const found = await docker('create', 'none', () => options.gateway.list(labelFilters(labels)))
       if (found.length > 1 || found.some((container) => !owns(container, spec))) throw conflict('create')
-      if (found.length === 1) return leaseFrom(spec, found[0].id)
+      if (found.length === 1) {
+        const current = await docker('create', 'none', () => options.gateway.inspect(found[0].id))
+        if (!current) throw new SandboxError('unavailable', 'create', 'unknown', 'owned-container-disappeared')
+        return leaseFrom(spec, current.id, current.volumes)
+      }
       const created = await docker('create', 'unknown', () => options.gateway.create({
         name: containerName(spec), image: requireDigest(spec.image), command: spec.command, labels,
         network: 'none', restart: 'no', init: true, autoRemove: false, resources: spec.resources,
       }))
-      return leaseFrom(spec, created.id)
+      return leaseFrom(spec, created.id, created.volumes)
     },
 
     async discover(scope) {
       const containers = await docker('discover', 'none', () => options.gateway.list(['io.ornn.managed=true', `io.ornn.runner-id=${scope.runnerId}`]))
-      return containers.map((container) => leaseFromLabels(container)).filter((lease): lease is SandboxLease => lease !== undefined)
+      const inspected = await Promise.all(containers.map(async (container) => {
+        const current = await docker('discover', 'none', () => options.gateway.inspect(container.id))
+        return current ? leaseFromLabels(current) : undefined
+      }))
+      return inspected.filter((lease): lease is SandboxLease => lease !== undefined)
     },
 
     async inspect(lease) {
@@ -172,7 +181,7 @@ export function createDockerSandboxDriver(options: { gateway: DockerGateway; now
       }
       const exact = await docker('destroy', 'none', () => options.gateway.inspect(lease.providerRef))
       const matches = await docker('destroy', 'none', () => options.gateway.list(labelFilters(ownershipLabels(lease))))
-      const volumeIds = current?.volumes ?? []
+      const volumeIds = [...new Set([...lease.volumeIds, ...(current?.volumes ?? [])])]
       const volumes = await Promise.all(volumeIds.map((id) => docker('destroy', 'none', () => options.gateway.inspectVolume(id))))
       if (exact || matches.length > 0 || volumes.some((volume) => volume !== undefined)) {
         throw new SandboxError('unavailable', 'destroy', 'unknown', 'owned-resource-still-present')
@@ -224,7 +233,7 @@ function owns(container: DockerContainer, lease: Pick<SandboxLease, 'runnerId' |
   return Object.entries(ownershipLabels(lease)).every(([key, value]) => container.labels[key] === value)
 }
 
-function leaseFrom(spec: SandboxSpec, providerRef: string): SandboxLease {
+function leaseFrom(spec: SandboxSpec, providerRef: string, volumeIds: string[]): SandboxLease {
   return {
     sandboxId: spec.sandboxId,
     generation: spec.generation,
@@ -233,6 +242,7 @@ function leaseFrom(spec: SandboxSpec, providerRef: string): SandboxLease {
     specFingerprint: spec.specFingerprint,
     createdAt: spec.createdAt,
     expiresAt: spec.expiresAt,
+    volumeIds,
   }
 }
 
@@ -242,7 +252,7 @@ function leaseFromLabels(container: DockerContainer): SandboxLease | undefined {
   if (labels['io.ornn.managed'] !== 'true' || !labels['io.ornn.runner-id'] || !labels['io.ornn.sandbox-id'] || !labels['io.ornn.spec-fingerprint'] || !Number.isSafeInteger(generation) || generation < 1) return undefined
   return {
     sandboxId: labels['io.ornn.sandbox-id'], generation, runnerId: labels['io.ornn.runner-id'], providerRef: container.id,
-    specFingerprint: labels['io.ornn.spec-fingerprint'], createdAt: '', expiresAt: '',
+    specFingerprint: labels['io.ornn.spec-fingerprint'], createdAt: '', expiresAt: '', volumeIds: container.volumes,
   }
 }
 

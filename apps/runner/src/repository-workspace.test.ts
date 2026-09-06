@@ -13,6 +13,7 @@ const checkout: NonNullable<LeaseGrant['checkout']> = {
 const lease: SandboxLease = {
   sandboxId: 'sandbox_v1_checkout', generation: 1, runnerId: 'runner_v1_checkout', providerRef: 'container-1',
   specFingerprint: 'fixture', createdAt: '2026-09-07T12:00:00.000Z', expiresAt: '2026-09-07T12:15:00.000Z',
+  volumeIds: [],
 }
 
 test('the trusted Runner fetches a pinned GitHub archive and transfers only regular workspace files through SandboxDriver', async () => {

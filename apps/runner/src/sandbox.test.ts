@@ -14,6 +14,7 @@ const lease: SandboxLease = {
   specFingerprint: 'fixture-v1',
   createdAt: now,
   expiresAt: '2026-09-07T12:15:00.000Z',
+  volumeIds: [],
 }
 
 test('creates an isolated Docker sandbox with deterministic ownership and verifies its destruction', async () => {
@@ -99,6 +100,25 @@ test('does not claim verified cleanup while Docker still reports the owned conta
   const driver = createDockerSandboxDriver({ gateway, now: () => now })
 
   await expect(driver.destroy(lease)).rejects.toMatchObject({ code: 'unavailable', operation: 'destroy', effect: 'unknown' })
+})
+
+test('does not claim verified cleanup while a recorded anonymous volume remains after container removal', async () => {
+  let present = true
+  const volumeLease = { ...lease, volumeIds: ['volume-123'] }
+  const gateway: DockerGateway = {
+    async list() { return [] },
+    async create() { throw new Error('not used') },
+    async inspect() { return present ? { id: lease.providerRef, labels: ownershipLabels(volumeLease), state: 'exited', processes: 'stopped', volumes: ['volume-123'] } : undefined },
+    async exec() { throw new Error('not used') },
+    async copyTo() {},
+    async copyFrom() { return new Uint8Array() },
+    async stop() {},
+    async remove() { present = false },
+    async inspectVolume() { return true },
+  }
+  const driver = createDockerSandboxDriver({ gateway, now: () => now })
+
+  await expect(driver.destroy(volumeLease)).rejects.toMatchObject({ code: 'unavailable', operation: 'destroy', effect: 'unknown' })
 })
 
 function ownershipLabels(value: SandboxLease): Record<string, string> {
