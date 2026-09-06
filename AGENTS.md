@@ -6,6 +6,8 @@
 
 Issues and specs are tracked in this repository's GitHub Issues using the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
+Record each non-binding idea as its own GitHub issue with the `needs-triage` label. Keep it brief: the idea, its expected benefit, and questions to decide later.
+
 ### Triage labels
 
 Use the five canonical triage labels without overrides. See `docs/agents/triage-labels.md`.
