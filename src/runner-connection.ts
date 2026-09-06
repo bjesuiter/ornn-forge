@@ -31,7 +31,6 @@ export class RunnerConnection extends DurableObject<Cloudflare.Env> {
     if (parsed.value.type === 'runner.synchronize' && isRunnerSynchronization(parsed.value.payload) && parsed.value.payload.runnerId === state.runnerId) {
       const synchronized = await store.synchronizeRunner?.(parsed.value.payload)
       if (!synchronized) return close(socket, 1008, 'Runner authorization failed')
-      await store.recordRunnerHeartbeat?.(state.runnerId)
       await store.recordRunnerSuccess?.(state.runnerId)
       socket.serializeAttachment({ runnerId: state.runnerId, instanceId: parsed.value.payload.instanceId, synchronized: true } satisfies Attachment)
       socket.send(JSON.stringify(envelope('runner.synchronized', synchronized)))

@@ -4,6 +4,7 @@ import { evictDurableObject } from 'cloudflare:test'
 import { envelope } from '@ornn-forge/protocol'
 
 const runnerId = 'runner_v1_abcdefghijklmnopqrstuv'
+const recoveringRunnerId = 'runner_v1_zyxwvutsrqponmlkjihgfe'
 const profile = {
   release: 'test', platform: 'linux', architecture: 'arm64', runtime: 'workerd', executor: 'fixture', capacity: 1,
   logicalCpuCount: 1, memoryLimitBytes: 134_217_728,
@@ -18,7 +19,7 @@ test('a real RunnerConnection Durable Object takes over and resumes synchronizat
     .bind(runnerId, 'test-digest', new Date().toISOString()).run()
 
   const stub = env.RUNNER_CONNECTION.getByName(runnerId)
-  const first = await connect(exports.default)
+  const first = await connect(exports.default, runnerId)
   const synchronized = nextMessage(first)
   first.send(JSON.stringify(envelope('runner.synchronize', {
     runnerId, instanceId: 'instance_v1_abcdefghijklmnopqrstuv', profile, activeLeases: [], commandJournal: [],
@@ -31,14 +32,37 @@ test('a real RunnerConnection Durable Object takes over and resumes synchronizat
   expect((await heartbeated).type).toBe('runner.heartbeat.accepted')
 
   const closed = new Promise<CloseEvent>((resolve) => first.addEventListener('close', (event) => resolve(event)))
-  const second = await connect(exports.default)
+  const second = await connect(exports.default, runnerId)
   expect((await closed).code).toBe(4001)
   second.close(1000, 'test complete')
 })
 
-async function connect(worker: { fetch(request: Request): Promise<Response> }): Promise<WebSocket> {
+test('a fresh Runner connection recovers D1-authoritative configuration and commands', async () => {
+  await env.ORNN_D1.prepare(`INSERT INTO remote_runners (
+    runner_id, kind, desired_capacity, enrollment_state, readiness_state, created_at
+  ) VALUES (?, 'remote', 2, 'enrolled', 'not_ready', ?)`).bind(recoveringRunnerId, new Date().toISOString()).run()
+  await env.ORNN_D1.prepare('INSERT INTO runner_credentials (runner_id, credential_digest, created_at) VALUES (?, ?, ?)')
+    .bind(recoveringRunnerId, 'test-digest', new Date().toISOString()).run()
+  await env.ORNN_D1.prepare('INSERT INTO runner_pauses (runner_id, paused, updated_at) VALUES (?, 1, ?)')
+    .bind(recoveringRunnerId, new Date().toISOString()).run()
+  await env.ORNN_D1.prepare(`INSERT INTO runner_commands (command_id, runner_id, command_type, payload_json, created_at)
+    VALUES (?, ?, ?, ?, ?)`).bind('command_v1_recover', recoveringRunnerId, 'profile.refresh', '{}', new Date().toISOString()).run()
+
+  const socket = await connect(exports.default, recoveringRunnerId)
+  const synchronized = nextMessage(socket)
+  socket.send(JSON.stringify(envelope('runner.synchronize', {
+    runnerId: recoveringRunnerId, instanceId: 'instance_v1_zyxwvutsrqponmlkjihgfe', profile, activeLeases: [], commandJournal: [],
+  })))
+  await expect(synchronized).resolves.toMatchObject({
+    type: 'runner.synchronized',
+    payload: { desiredConfiguration: { paused: true, capacity: 2 }, pendingCommands: [{ commandId: 'command_v1_recover' }] },
+  })
+  socket.close(1000, 'test complete')
+})
+
+async function connect(worker: { fetch(request: Request): Promise<Response> }, id: string): Promise<WebSocket> {
   const response = await worker.fetch(new Request('https://runner.test/connect', {
-    headers: { upgrade: 'websocket', 'x-ornn-runner-id': runnerId },
+    headers: { upgrade: 'websocket', 'x-ornn-runner-id': id },
   }))
   const socket = response.webSocket
   if (!socket) throw new Error('RunnerConnection did not upgrade the WebSocket')

@@ -117,6 +117,7 @@ async function openControlConnection(
   })
   const instanceId = opaqueInstanceId()
   let synchronized = false
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined
   let resolveClosed: () => void = () => {}
   let resolveSynchronized: () => void = () => {}
   let rejectSynchronized: (error: Error) => void = () => {}
@@ -139,6 +140,9 @@ async function openControlConnection(
     void handleControlMessage(event.data, { config, socket, state, stateStore, markSynchronized: async () => {
       synchronized = true
       await stateStore.markSynchronized()
+      const heartbeat = () => socket.send(JSON.stringify(envelope('runner.heartbeat', { runnerId: config.runnerId, instanceId })))
+      heartbeat()
+      heartbeatTimer = setInterval(heartbeat, 30_000)
       onSynchronized?.()
       resolveSynchronized()
     } }).catch((error) => {
@@ -151,6 +155,7 @@ async function openControlConnection(
   })
   socket.addEventListener('error', () => socket.close())
   socket.addEventListener('close', () => {
+    if (heartbeatTimer) clearInterval(heartbeatTimer)
     if (!synchronized) rejectSynchronized(new Error('Runner control connection closed before synchronization'))
     resolveClosed()
   })
