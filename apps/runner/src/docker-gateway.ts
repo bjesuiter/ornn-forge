@@ -1,7 +1,7 @@
 import type { DockerGateway, ExecResult } from './sandbox'
 
 type CommandResult = { exitCode: number; stdout: Uint8Array; stderr: Uint8Array }
-type RunCommand = (arguments_: string[], input?: Uint8Array) => Promise<CommandResult>
+type RunCommand = (arguments_: string[], input?: Uint8Array, signal?: AbortSignal) => Promise<CommandResult>
 
 export function createDockerCliGateway(run: RunCommand = runDocker): DockerGateway {
   const gateway: DockerGateway = {
@@ -49,7 +49,7 @@ export function createDockerCliGateway(run: RunCommand = runDocker): DockerGatew
       const arguments_ = ['container', 'exec']
       if (options.cwd) arguments_.push('--workdir', options.cwd)
       arguments_.push(id, ...command)
-      return runWithAbort(run, arguments_, options.signal)
+      return runWithAbort(run, arguments_, options.signal, options.timeoutMs)
     },
     async copyTo(id, path, data) {
       await required(run(['container', 'exec', '--interactive', id, 'sh', '-ceu', 'cat > "$1"', 'sh', path], data))
@@ -81,18 +81,44 @@ export function createDockerCliGateway(run: RunCommand = runDocker): DockerGatew
   return gateway
 }
 
-async function runDocker(arguments_: string[], input?: Uint8Array): Promise<CommandResult> {
+async function runDocker(arguments_: string[], input?: Uint8Array, signal?: AbortSignal): Promise<CommandResult> {
+  if (signal?.aborted) throw abortedError()
   const process = Bun.spawn(['docker', ...arguments_], { stdin: input ? 'pipe' : 'ignore', stdout: 'pipe', stderr: 'pipe' })
+  let aborted = false
+  const abort = () => { aborted = true; process.kill() }
+  signal?.addEventListener('abort', abort, { once: true })
   if (input) {
     process.stdin?.write(input)
     process.stdin?.end()
   }
-  return { exitCode: await process.exited, stdout: new Uint8Array(await new Response(process.stdout).arrayBuffer()), stderr: new Uint8Array(await new Response(process.stderr).arrayBuffer()) }
+  try {
+    const exitCode = await process.exited
+    const output = { exitCode, stdout: new Uint8Array(await new Response(process.stdout).arrayBuffer()), stderr: new Uint8Array(await new Response(process.stderr).arrayBuffer()) }
+    if (aborted) throw abortedError()
+    return output
+  } finally {
+    signal?.removeEventListener('abort', abort)
+  }
 }
 
-async function runWithAbort(run: RunCommand, arguments_: string[], signal: AbortSignal | undefined): Promise<ExecResult> {
-  if (signal?.aborted) throw new Error('Docker exec aborted before start')
-  return run(arguments_)
+async function runWithAbort(run: RunCommand, arguments_: string[], signal: AbortSignal | undefined, timeoutMs: number | undefined): Promise<ExecResult> {
+  if (signal?.aborted) throw abortedError()
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  signal?.addEventListener('abort', abort, { once: true })
+  const timeout = timeoutMs === undefined ? undefined : setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    return await run(arguments_, undefined, controller.signal)
+  } finally {
+    if (timeout) clearTimeout(timeout)
+    signal?.removeEventListener('abort', abort)
+  }
+}
+
+function abortedError(): Error {
+  const error = new Error('Docker command aborted')
+  error.name = 'AbortError'
+  return error
 }
 
 async function required(result: Promise<CommandResult>): Promise<CommandResult> {

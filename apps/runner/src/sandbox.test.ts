@@ -121,6 +121,25 @@ test('does not claim verified cleanup while a recorded anonymous volume remains 
   await expect(driver.destroy(volumeLease)).rejects.toMatchObject({ code: 'unavailable', operation: 'destroy', effect: 'unknown' })
 })
 
+test('reports an aborted Docker command as a deadline-exceeded Ornn error', async () => {
+  const gateway: DockerGateway = {
+    async list() { return [] },
+    async create() { throw new Error('not used') },
+    async inspect() { return { id: lease.providerRef, labels: ownershipLabels(lease), state: 'running', processes: 'running', volumes: [] } },
+    async exec() { const error = new Error('aborted'); error.name = 'AbortError'; throw error },
+    async copyTo() {},
+    async copyFrom() { return new Uint8Array() },
+    async stop() {},
+    async remove() {},
+    async inspectVolume() { return undefined },
+  }
+  const driver = createDockerSandboxDriver({ gateway, now: () => now })
+
+  await expect(driver.exec(lease, { command: ['sleep', 'infinity'] }, new AbortController().signal)).rejects.toMatchObject({
+    code: 'deadline_exceeded', operation: 'exec', effect: 'unknown', diagnosticRef: 'operation-aborted',
+  })
+})
+
 function ownershipLabels(value: SandboxLease): Record<string, string> {
   return {
     'io.ornn.managed': 'true',

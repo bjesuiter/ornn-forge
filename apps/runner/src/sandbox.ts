@@ -217,6 +217,7 @@ async function docker<T>(operation: SandboxOperation, effect: OperationEffect, o
     return await operationCall()
   } catch (error) {
     if (error instanceof SandboxError) throw error
+    if (error instanceof Error && error.name === 'AbortError') throw new SandboxError('deadline_exceeded', operation, effect, 'operation-aborted')
     throw new SandboxError('unavailable', operation, effect, error instanceof Error ? error.name : 'docker-error')
   }
 }
