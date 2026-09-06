@@ -1,6 +1,23 @@
 import { expect, test } from 'bun:test'
 import { createControlPlane, createInMemoryInvocationStore } from '../../../src/control-plane'
-import { executeFixtureLease } from './main'
+import { executeFixtureLease, remoteRunnerConfigFromEnvironment } from './main'
+
+test('the Runner reads its mounted credential file without placing the secret in its environment', async () => {
+  const config = await remoteRunnerConfigFromEnvironment({
+    ORNN_CONTROL_PLANE_URL: 'https://control.test',
+    ORNN_RUNNER_ID: 'runner_local_debug',
+    ORNN_RUNNER_CREDENTIAL_FILE: '/run/secrets/runner_credential',
+  }, async (path) => {
+    expect(path).toBe('/run/secrets/runner_credential')
+    return 'credential-from-file\n'
+  })
+
+  expect(config).toEqual({
+    controlPlaneUrl: 'https://control.test',
+    runnerId: 'runner_local_debug',
+    credential: 'credential-from-file',
+  })
+})
 
 test('the deterministic Runner fixture uses the production polling protocol', async () => {
   const app = createControlPlane({

@@ -7,6 +7,25 @@ export type RemoteRunnerConfig = {
 }
 
 type HttpRequest = (input: URL, init?: RequestInit) => Promise<Response>
+type CredentialFileReader = (path: string) => Promise<string>
+
+export async function remoteRunnerConfigFromEnvironment(
+  environment: Record<string, string | undefined> = process.env,
+  readCredentialFile: CredentialFileReader = (path) => Bun.file(path).text(),
+): Promise<RemoteRunnerConfig> {
+  const controlPlaneUrl = environment.ORNN_CONTROL_PLANE_URL
+  const runnerId = environment.ORNN_RUNNER_ID
+  const credential = environment.ORNN_RUNNER_CREDENTIAL
+    ?? (environment.ORNN_RUNNER_CREDENTIAL_FILE
+      ? (await readCredentialFile(environment.ORNN_RUNNER_CREDENTIAL_FILE)).trim()
+      : undefined)
+
+  if (!controlPlaneUrl || !runnerId || !credential) {
+    throw new Error('ORNN_CONTROL_PLANE_URL, ORNN_RUNNER_ID, and ORNN_RUNNER_CREDENTIAL or ORNN_RUNNER_CREDENTIAL_FILE are required')
+  }
+
+  return { controlPlaneUrl, runnerId, credential }
+}
 
 export async function executeFixtureLease(
   config: RemoteRunnerConfig,
@@ -53,9 +72,5 @@ async function accepted(response: Promise<Response>) {
 }
 
 if (import.meta.main) {
-  const controlPlaneUrl = process.env.ORNN_CONTROL_PLANE_URL
-  const runnerId = process.env.ORNN_RUNNER_ID
-  const credential = process.env.ORNN_RUNNER_CREDENTIAL
-  if (!controlPlaneUrl || !runnerId || !credential) throw new Error('ORNN_CONTROL_PLANE_URL, ORNN_RUNNER_ID, and ORNN_RUNNER_CREDENTIAL are required')
-  await executeFixtureLease({ controlPlaneUrl, runnerId, credential })
+  await executeFixtureLease(await remoteRunnerConfigFromEnvironment())
 }

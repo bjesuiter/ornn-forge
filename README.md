@@ -84,3 +84,23 @@ It requires the `ORNN_SMOKE_*` variables named in
 [`scripts/smoke-deployed-d1.ts`](scripts/smoke-deployed-d1.ts). The check signs a
 fresh fixture delivery, verifies that D1 admits it transactionally, and immediately
 inspects the created pending Job through the deployed Worker.
+
+## Local Runner debug container
+
+The Runner can be exercised locally without installing Bun or the Runner on the
+host. It is a development test harness, not a `homeserv1` deployment. Start
+OrbStack (macOS) or the local Docker Engine (Linux), then run:
+
+```sh
+ORNN_CONTROL_PLANE_URL=https://control.test \
+ORNN_RUNNER_ID=runner_local_debug \
+ORNN_RUNNER_CREDENTIAL_FILE=/secure/local-runner-credential \
+scripts/runner-debug up --build
+```
+
+The launcher uses only the active Docker context's Unix socket and refuses TCP,
+SSH, or unavailable endpoints. It mounts the checkout into the Runner for watch
+mode, but Job sandboxes never receive the host checkout, Docker socket, Runner
+state, or credential file. Use `scripts/runner-debug --root up --build` only as
+the explicit OrbStack fallback when its forwarded socket cannot be read by the
+container's normal `bun` user.

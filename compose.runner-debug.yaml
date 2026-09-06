@@ -1,0 +1,81 @@
+name: ornn-runner-debug
+
+services:
+  runner-init:
+    build:
+      context: .
+      dockerfile: apps/runner/Dockerfile
+      target: debug
+    user: root
+    volumes:
+      - type: volume
+        source: runner-state
+        target: /var/lib/ornn-runner
+      - type: volume
+        source: runner-bun-cache
+        target: /var/cache/bun
+      - type: volume
+        source: runner-node-modules
+        target: /workspace/ornn-forge/node_modules
+    command:
+      - sh
+      - -ceu
+      - chown -R bun:bun /var/lib/ornn-runner /var/cache/bun /workspace/ornn-forge/node_modules
+
+  runner:
+    build:
+      context: .
+      dockerfile: apps/runner/Dockerfile
+      target: debug
+    init: true
+    read_only: true
+    user: ${ORNN_RUNNER_USER:-bun}
+    group_add:
+      - ${ORNN_DOCKER_SOCKET_GID:?The launcher must provide the Docker socket group ID.}
+    depends_on:
+      runner-init:
+        condition: service_completed_successfully
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+      ORNN_CONTROL_PLANE_URL: ${ORNN_CONTROL_PLANE_URL:?Set the local control-plane URL.}
+      ORNN_RUNNER_CREDENTIAL_FILE: /run/secrets/runner_credential
+      ORNN_RUNNER_ID: ${ORNN_RUNNER_ID:?Set a development Runner ID.}
+    secrets:
+      - runner_credential
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp
+    volumes:
+      - type: bind
+        source: ${ORNN_DOCKER_SOCKET:?The launcher must provide the active Docker Unix socket.}
+        target: /var/run/docker.sock
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ORNN_PROJECT_DIR:?The launcher must provide the repository path.}
+        target: /workspace/ornn-forge
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: runner-state
+        target: /var/lib/ornn-runner
+      - type: volume
+        source: runner-bun-cache
+        target: /var/cache/bun
+      - type: volume
+        source: runner-node-modules
+        target: /workspace/ornn-forge/node_modules
+
+volumes:
+  runner-bun-cache:
+  runner-node-modules:
+  runner-state:
+
+secrets:
+  runner_credential:
+    file: ${ORNN_RUNNER_CREDENTIAL_FILE:?Set a path to the development Runner credential file.}

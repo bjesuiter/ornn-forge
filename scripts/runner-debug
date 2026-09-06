@@ -1,0 +1,88 @@
+#!/bin/sh
+set -eu
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: scripts/runner-debug [--root] <docker-compose-command> [arguments...]
+
+Examples:
+  ORNN_CONTROL_PLANE_URL=https://control.test \\
+  ORNN_RUNNER_ID=runner_local_debug \\
+  ORNN_RUNNER_CREDENTIAL_FILE=/secure/local-runner-credential \\
+  scripts/runner-debug up --build
+
+--root is an explicit macOS/OrbStack-only fallback when the forwarded socket
+cannot be used by the image's non-root `bun` user.
+EOF
+  exit 64
+}
+
+runner_user=bun
+if [ "${1:-}" = '--root' ]; then
+  if [ "$(uname -s)" != Darwin ]; then
+    echo '--root is only supported for the explicit OrbStack fallback' >&2
+    exit 64
+  fi
+  runner_user=root
+  shift
+fi
+
+[ "$#" -gt 0 ] || usage
+
+if [ -z "${ORNN_CONTROL_PLANE_URL:-}" ]; then
+  echo 'ORNN_CONTROL_PLANE_URL is required' >&2
+  exit 64
+fi
+
+if [ -z "${ORNN_RUNNER_ID:-}" ]; then
+  echo 'ORNN_RUNNER_ID is required' >&2
+  exit 64
+fi
+
+if [ -z "${ORNN_RUNNER_CREDENTIAL_FILE:-}" ]; then
+  echo 'ORNN_RUNNER_CREDENTIAL_FILE is required' >&2
+  exit 64
+fi
+
+if [ ! -f "$ORNN_RUNNER_CREDENTIAL_FILE" ]; then
+  echo "ORNN_RUNNER_CREDENTIAL_FILE must name a readable regular file" >&2
+  exit 64
+fi
+
+active_context=$(docker context show)
+engine_endpoint=$(docker context inspect --format '{{ .Endpoints.docker.Host }}' "$active_context")
+case "$engine_endpoint" in
+  unix://*) docker_socket=${engine_endpoint#unix://} ;;
+  *)
+    echo "The active Docker context must use a local unix:// endpoint, got: $engine_endpoint" >&2
+    exit 64
+    ;;
+esac
+
+if [ ! -S "$docker_socket" ]; then
+  echo "The active Docker socket is unavailable: $docker_socket" >&2
+  exit 69
+fi
+
+if docker_socket_gid=$(stat -c '%g' "$docker_socket" 2>/dev/null); then
+  :
+else
+  docker_socket_gid=$(stat -f '%g' "$docker_socket")
+fi
+
+case "$docker_socket_gid" in
+  ''|*[!0-9]*)
+    echo "Could not determine a numeric Docker socket group ID" >&2
+    exit 69
+    ;;
+esac
+
+script_directory=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
+project_directory=$(CDPATH= cd "$script_directory/.." && pwd -P)
+
+export ORNN_DOCKER_SOCKET="$docker_socket"
+export ORNN_DOCKER_SOCKET_GID="$docker_socket_gid"
+export ORNN_PROJECT_DIR="$project_directory"
+export ORNN_RUNNER_USER="$runner_user"
+
+exec docker compose --project-directory "$project_directory" -f "$project_directory/compose.runner-debug.yaml" "$@"
