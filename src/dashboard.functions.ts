@@ -4,12 +4,20 @@ import { env } from 'cloudflare:workers'
 import { auth } from './auth.server'
 import { createD1InvocationStore } from './control-plane'
 import { listDashboardRunners } from './dashboard-runners'
+import { listDashboardWebhooks } from './dashboard-webhooks'
 
 export const getDashboardRunners = createServerFn({ method: 'GET' }).handler(async () => {
   setResponseHeader('Cache-Control', 'no-store')
   const session = await auth.api.getSession({ headers: getRequestHeaders() })
   if (!session) throw new Error('Dashboard session required')
   return listDashboardRunners(env.ORNN_D1)
+})
+
+export const getDashboardWebhooks = createServerFn({ method: 'GET' }).handler(async () => {
+  setResponseHeader('Cache-Control', 'no-store')
+  const session = await auth.api.getSession({ headers: getRequestHeaders() })
+  if (!session) throw new Error('Dashboard session required')
+  return listDashboardWebhooks(env.ORNN_D1)
 })
 
 export const setDashboardRunnerPaused = createServerFn({ method: 'POST' })

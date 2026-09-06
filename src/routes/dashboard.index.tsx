@@ -2,17 +2,20 @@ import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import { useEffect } from 'react'
 import { authClient } from '../auth-client'
 import { Dashboard } from '../components/dashboard-placeholder'
-import { getDashboardRunners, setDashboardRunnerPaused } from '../dashboard.functions'
+import { getDashboardRunners, getDashboardWebhooks, setDashboardRunnerPaused } from '../dashboard.functions'
 
 export const Route = createFileRoute('/dashboard/')({
-  loader: () => getDashboardRunners(),
+  loader: async () => {
+    const [runners, webhooks] = await Promise.all([getDashboardRunners(), getDashboardWebhooks()])
+    return { runners, webhooks }
+  },
   component: DashboardRoute,
 })
 
 function DashboardRoute() {
   const navigate = useNavigate()
   const router = useRouter()
-  const runners = Route.useLoaderData()
+  const { runners, webhooks } = Route.useLoaderData()
 
   useEffect(() => {
     const refresh = window.setInterval(() => void router.invalidate(), 5_000)
@@ -33,5 +36,5 @@ function DashboardRoute() {
     await router.invalidate()
   }
 
-  return <Dashboard runners={runners} onSignOut={signOut} onSetRunnerPaused={setRunnerPaused} />
+  return <Dashboard runners={runners} webhooks={webhooks} onSignOut={signOut} onSetRunnerPaused={setRunnerPaused} />
 }

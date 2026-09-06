@@ -1,13 +1,16 @@
 import { useState } from 'react'
 import type { DashboardRunner } from '../dashboard-runners'
+import type { DashboardWebhook } from '../dashboard-webhooks'
 import './forge-designs.css'
 
 export function Dashboard({
   runners,
+  webhooks,
   onSignOut,
   onSetRunnerPaused,
 }: {
   runners: DashboardRunner[]
+  webhooks: DashboardWebhook[]
   onSignOut: () => Promise<void>
   onSetRunnerPaused: (runnerId: string, paused: boolean) => Promise<void>
 }) {
@@ -15,6 +18,7 @@ export function Dashboard({
   const [error, setError] = useState(false)
   const [updatingRunnerId, setUpdatingRunnerId] = useState<string>()
   const [runnerError, setRunnerError] = useState(false)
+  const [showAllWebhooks, setShowAllWebhooks] = useState(false)
 
   async function signOut() {
     setSigningOut(true)
@@ -76,6 +80,48 @@ export function Dashboard({
             Runner-Status konnte nicht geändert werden. Bitte versuche es erneut.
           </p>
         )}
+        <section className="fd-webhook-history" aria-labelledby="fd-webhook-title">
+          <div className="fd-webhook-heading">
+            <div>
+              <p className="fd-kicker">Eingang</p>
+              <h2 id="fd-webhook-title">Neue Events</h2>
+            </div>
+            <span className="fd-webhook-count">{webhooks.length} zuletzt eingegangen</span>
+          </div>
+          {webhooks.length === 0 ? (
+            <p className="fd-webhook-empty">Noch keine GitHub-Webhooks eingegangen.</p>
+          ) : (
+            <>
+              <ul className="fd-webhook-list" aria-label="Eingegangene GitHub-Webhooks">
+                {webhooks.slice(0, showAllWebhooks ? undefined : 3).map((webhook) => (
+                  <li key={webhook.id} className="fd-webhook-row">
+                    <span className={`fd-webhook-mark is-${webhook.status}`} aria-hidden="true" />
+                    <div className="fd-webhook-content">
+                      <p className="fd-webhook-title">
+                        {webhook.repository} <span aria-hidden="true">·</span> #{webhook.issueNumber} {webhook.issueTitle}
+                      </p>
+                      <p className="fd-webhook-meta">
+                        {webhook.source === 'comment' ? 'Kommentar-Webhook' : 'Issue-Webhook'} · {relativeTime(webhook.receivedAt)}
+                      </p>
+                    </div>
+                    <p className={`fd-webhook-status is-${webhook.status}`}>{webhookStatusLabel(webhook.status)}</p>
+                  </li>
+                ))}
+              </ul>
+              {webhooks.length > 3 && (
+                <button
+                  className="fd-webhook-more"
+                  type="button"
+                  aria-expanded={showAllWebhooks}
+                  onClick={() => setShowAllWebhooks((visible) => !visible)}
+                >
+                  {showAllWebhooks ? 'Weniger anzeigen' : `Weitere ${webhooks.length - 3} anzeigen`}
+                  <span aria-hidden="true">{showAllWebhooks ? '↑' : '↓'}</span>
+                </button>
+              )}
+            </>
+          )}
+        </section>
         <section className="fd-runner-overview" aria-labelledby="fd-title">
           <div className="fd-runner-overview-heading">
             <p className="fd-kicker">Ornn Forge</p>
@@ -203,6 +249,15 @@ export function Dashboard({
       </main>
     </div>
   )
+}
+
+function webhookStatusLabel(status: DashboardWebhook['status']) {
+  switch (status) {
+    case 'queued': return 'Angenommen · wartet auf Runner'
+    case 'running': return 'Beim Runner in Arbeit'
+    case 'completed': return 'Erfolgreich abgeschlossen'
+    case 'message_uncertain': return 'GitHub-Antwort ungeklärt'
+  }
 }
 
 function dateTime(value: string) {
