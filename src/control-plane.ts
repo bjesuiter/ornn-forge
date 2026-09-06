@@ -7,6 +7,8 @@ import {
   type AnalysisArtifact,
   type LeaseGrant,
   type RunnerFault,
+  type RunnerSynchronization,
+  type RunnerDesiredConfiguration,
   type RunnerProfile,
 } from '@ornn-forge/protocol'
 import type { CleanupStatus, ExecutionOutcome, OrnnMessageState } from '@ornn-forge/domain'
@@ -105,7 +107,9 @@ export interface InvocationStore {
   preflightSetupToken?(input: SetupTokenLookup): Promise<RemoteRunner | undefined>
   enrollRemoteRunner?(input: SetupTokenEnrollment): Promise<RemoteRunner | undefined>
   authenticateRunner?(runnerId: string, credentialDigest: string): Promise<boolean>
+  recordRunnerHeartbeat?(runnerId: string): Promise<void>
   updateRunnerProfile?(runnerId: string, profile: RunnerProfile): Promise<void>
+  synchronizeRunner?(input: RunnerSynchronization): Promise<RunnerSynchronizationResult | undefined>
   pollRunner?(runnerId: string): Promise<LeaseGrant | undefined>
   setRunnerPaused?(runnerId: string, paused: boolean): Promise<boolean>
   heartbeatLease?(input: LeaseInput): Promise<boolean>
@@ -129,6 +133,12 @@ type SetupTokenLookup = { tokenDigest: string; now: string }
 type SetupTokenEnrollment = SetupTokenLookup & { credentialDigest: string }
 
 type LeaseInput = { runnerId: string; jobId: string; leaseToken: string }
+
+export type RunnerSynchronizationResult = {
+  desiredConfiguration: RunnerDesiredConfiguration
+  activeLeases: Array<{ jobId: string; accepted: boolean }>
+  pendingCommands: Array<{ commandId: string; type: string; payload: Record<string, unknown> }>
+}
 
 export function createControlPlane(options: ControlPlaneOptions) {
   const operatorCredential = operatorCredentialBytes(options.operatorBearerSecret)
@@ -693,6 +703,7 @@ export function createInMemoryInvocationStore(): InvocationStore {
   const runnerCredentials = new Map<string, string>()
   const runnerProfiles = new Map<string, RunnerProfile>()
   const pausedRunners = new Set<string>()
+  const runnerPresence = new Map<string, string>()
   const leasesByJob = new Map<string, {
     runnerId: string
     tokenDigest: string
@@ -774,8 +785,27 @@ export function createInMemoryInvocationStore(): InvocationStore {
       }
       return existing === credentialDigest
     },
+    async recordRunnerHeartbeat(runnerId) {
+      runnerPresence.set(runnerId, new Date().toISOString())
+    },
     async updateRunnerProfile(runnerId, profile) {
       runnerProfiles.set(runnerId, profile)
+    },
+    async synchronizeRunner(input) {
+      if (!runnerCredentials.has(input.runnerId)) return undefined
+      runnerProfiles.set(input.runnerId, input.profile)
+      const activeLeases = await Promise.all(input.activeLeases.map(async (lease) => ({
+        jobId: lease.jobId,
+        accepted: (await matchingLease(leasesByJob, { runnerId: input.runnerId, ...lease })) !== undefined,
+      })))
+      return {
+        desiredConfiguration: {
+          paused: pausedRunners.has(input.runnerId),
+          capacity: remoteRunners.get(input.runnerId)?.desiredCapacity ?? input.profile.capacity,
+        },
+        activeLeases,
+        pendingCommands: [],
+      }
     },
     async pollRunner(runnerId) {
       if (pausedRunners.has(runnerId)) return undefined
@@ -1162,28 +1192,70 @@ class D1InvocationStore implements InvocationStore {
   }
 
   async authenticateRunner(runnerId: string, credentialDigest: string): Promise<boolean> {
-    const createdAt = new Date().toISOString()
-    await this.database.prepare(`INSERT INTO runner_credentials (runner_id, credential_digest, created_at)
-      VALUES (?, ?, ?) ON CONFLICT(runner_id) DO NOTHING`).bind(runnerId, credentialDigest, createdAt).run()
     const stored = await this.database.prepare('SELECT credential_digest FROM runner_credentials WHERE runner_id = ?')
       .bind(runnerId).first<{ credential_digest: string }>()
-    if (stored?.credential_digest !== credentialDigest) return false
+    return stored?.credential_digest === credentialDigest
+  }
+
+  async recordRunnerHeartbeat(runnerId: string): Promise<void> {
+    const now = new Date().toISOString()
     await this.database.prepare(`INSERT INTO runner_presence (runner_id, last_seen_at)
       VALUES (?, ?) ON CONFLICT(runner_id) DO UPDATE SET last_seen_at = excluded.last_seen_at`)
-      .bind(runnerId, createdAt).run()
-    return true
+      .bind(runnerId, now).run()
   }
 
   async updateRunnerProfile(runnerId: string, profile: RunnerProfile): Promise<void> {
     await this.database.prepare(`INSERT INTO runner_profiles (
-      runner_id, release, platform, architecture, runtime, executor, capacity, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      runner_id, release, platform, architecture, runtime, executor, capacity, logical_cpu_count, memory_limit_bytes, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(runner_id) DO UPDATE SET release = excluded.release, platform = excluded.platform,
       architecture = excluded.architecture, runtime = excluded.runtime, executor = excluded.executor,
-      capacity = excluded.capacity, updated_at = excluded.updated_at`).bind(
+      capacity = excluded.capacity, logical_cpu_count = excluded.logical_cpu_count,
+      memory_limit_bytes = excluded.memory_limit_bytes, updated_at = excluded.updated_at`).bind(
       runnerId, profile.release, profile.platform, profile.architecture, profile.runtime, profile.executor,
-      profile.capacity, new Date().toISOString(),
+      profile.capacity, profile.logicalCpuCount, profile.memoryLimitBytes, new Date().toISOString(),
     ).run()
+  }
+
+  async synchronizeRunner(input: RunnerSynchronization): Promise<RunnerSynchronizationResult | undefined> {
+    const runner = await this.remoteRunner(input.runnerId)
+    if (!runner || runner.enrollment !== 'enrolled') return undefined
+    await this.updateRunnerProfile(input.runnerId, input.profile)
+    const now = new Date().toISOString()
+    if (input.commandJournal.length > 0) {
+      await this.database.batch(input.commandJournal.map((entry) => this.database.prepare(`INSERT INTO runner_command_journal (
+        runner_id, command_id, state, reported_at
+      ) SELECT ?, command_id, ?, ? FROM runner_commands WHERE runner_id = ? AND command_id = ?
+      ON CONFLICT(runner_id, command_id) DO UPDATE SET state = CASE
+        WHEN runner_command_journal.state IN ('completed', 'failed') THEN runner_command_journal.state
+        ELSE excluded.state END,
+      reported_at = CASE WHEN runner_command_journal.state IN ('completed', 'failed') THEN runner_command_journal.reported_at ELSE excluded.reported_at END`).bind(
+        input.runnerId, entry.state, now, input.runnerId, entry.commandId,
+      )))
+    }
+    const activeLeases = await Promise.all(input.activeLeases.map(async (lease) => ({
+      jobId: lease.jobId,
+      accepted: await this.heartbeatLease({ runnerId: input.runnerId, ...lease }),
+    })))
+    const pause = await this.database.prepare('SELECT paused FROM runner_pauses WHERE runner_id = ?')
+      .bind(input.runnerId).first<{ paused: number }>()
+    const commands = await this.database.prepare(`SELECT command.command_id, command.command_type, command.payload_json
+      FROM runner_commands command
+      LEFT JOIN runner_command_journal journal ON journal.runner_id = command.runner_id AND journal.command_id = command.command_id
+      WHERE command.runner_id = ? AND journal.state IS NULL
+      ORDER BY command.created_at ASC`).bind(input.runnerId).all<{ command_id: string; command_type: string; payload_json: string }>()
+    return {
+      desiredConfiguration: { paused: pause?.paused === 1, capacity: runner.desiredCapacity },
+      activeLeases,
+      pendingCommands: commands.results.flatMap((command) => {
+        try {
+          const payload = JSON.parse(command.payload_json)
+          return typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+            ? [{ commandId: command.command_id, type: command.command_type, payload }]
+            : []
+        } catch { return [] }
+      }),
+    }
   }
 
   async pollRunner(runnerId: string): Promise<LeaseGrant | undefined> {

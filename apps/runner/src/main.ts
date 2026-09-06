@@ -36,6 +36,8 @@ export async function remoteRunnerConfigFromEnvironment(
       runtime: `Bun ${Bun.version}`,
       executor: environment.ORNN_RUNNER_EXECUTOR ?? 'fixture',
       capacity: runnerCapacity(environment.ORNN_RUNNER_CAPACITY),
+      logicalCpuCount: Math.max(1, navigator.hardwareConcurrency ?? 1),
+      memoryLimitBytes: 128 * 1024 * 1024,
     },
   }
 }

@@ -166,6 +166,20 @@ test('issues independent, short-lived, one-time Setup tokens for Remote Runner e
   expect((await setupRequest('/api/v1/runner/setup/preflight', { setupToken: replacement.setupToken })).status).toBe(401)
 })
 
+test('reconciles a reconnecting Runner against durable desired configuration', async () => {
+  const store = createInMemoryInvocationStore()
+  await store.authenticateRunner?.('runner_homeserv1', 'digest')
+  await store.setRunnerPaused?.('runner_homeserv1', true)
+
+  const synchronized = await store.synchronizeRunner?.({
+    runnerId: 'runner_homeserv1', instanceId: 'instance_v1_0123456789012345678901',
+    profile: { release: 'v1', platform: 'linux', architecture: 'arm64', runtime: 'Bun', executor: 'fixture', capacity: 2, logicalCpuCount: 4, memoryLimitBytes: 1_073_741_824 },
+    activeLeases: [], commandJournal: [],
+  })
+
+  expect(synchronized).toMatchObject({ desiredConfiguration: { paused: true, capacity: 2 }, activeLeases: [], pendingCommands: [] })
+})
+
 test('leases one pending Job to its authenticated Runner and records its fixture Analysis artifact', async () => {
   const calls: string[] = []
   const app = createControlPlane({

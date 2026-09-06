@@ -13,9 +13,22 @@ export type RunnerProfile = {
   runtime: string
   executor: string
   capacity: number
+  logicalCpuCount: number
+  memoryLimitBytes: number
 }
 
 export type RunnerFault = { code: string }
+
+export type RunnerLeaseClaim = { jobId: string; leaseToken: string }
+export type RunnerCommandJournalEntry = { commandId: string; state: 'accepted' | 'completed' | 'failed' }
+export type RunnerDesiredConfiguration = { paused: boolean; capacity: number }
+export type RunnerSynchronization = {
+  runnerId: string
+  instanceId: string
+  profile: RunnerProfile
+  activeLeases: RunnerLeaseClaim[]
+  commandJournal: RunnerCommandJournalEntry[]
+}
 
 export type RunnerPoll = RunnerEnvelope<'runner.poll', { runnerId: string; profile?: RunnerProfile }>
 export type RunnerHeartbeat = RunnerEnvelope<'lease.heartbeat', {
@@ -86,14 +99,29 @@ export function isRunnerProfile(value: unknown): value is RunnerProfile {
   return isShortText(value.release) && isShortText(value.platform) && isShortText(value.architecture)
     && isShortText(value.runtime) && isShortText(value.executor)
     && typeof value.capacity === 'number' && Number.isInteger(value.capacity) && value.capacity >= 1 && value.capacity <= 32
+    && typeof value.logicalCpuCount === 'number' && Number.isInteger(value.logicalCpuCount) && value.logicalCpuCount >= 1 && value.logicalCpuCount <= 256
+    && typeof value.memoryLimitBytes === 'number' && Number.isSafeInteger(value.memoryLimitBytes) && value.memoryLimitBytes >= 134_217_728
 }
 
 export function isRunnerFault(value: unknown): value is RunnerFault {
   return isRecord(value) && isShortText(value.code)
 }
 
+export function isRunnerSynchronization(value: unknown): value is RunnerSynchronization {
+  if (!isRecord(value) || !isRunnerProfile(value.profile) || !isOpaqueId(value.runnerId, 'runner') || !isOpaqueId(value.instanceId, 'instance')) return false
+  return Array.isArray(value.activeLeases) && value.activeLeases.length <= 32
+    && value.activeLeases.every((lease) => isRecord(lease) && isShortText(lease.jobId) && isShortText(lease.leaseToken))
+    && Array.isArray(value.commandJournal) && value.commandJournal.length <= 256
+    && value.commandJournal.every((entry) => isRecord(entry) && isShortText(entry.commandId)
+      && (entry.state === 'accepted' || entry.state === 'completed' || entry.state === 'failed'))
+}
+
 function isShortText(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 100
+}
+
+function isOpaqueId(value: unknown, kind: string): value is string {
+  return typeof value === 'string' && new RegExp(`^${kind}_v1_[A-Za-z0-9_-]{22}$`).test(value)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

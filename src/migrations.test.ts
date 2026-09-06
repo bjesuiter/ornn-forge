@@ -8,6 +8,7 @@ const runnerPresenceMigration = readFileSync(new URL('../migrations/0005_record_
 const runnerPausesMigration = readFileSync(new URL('../migrations/0006_pause_runners.sql', import.meta.url), 'utf8')
 const runnerDiagnosticsMigration = readFileSync(new URL('../migrations/0007_record_runner_diagnostics.sql', import.meta.url), 'utf8')
 const remoteRunnersMigration = readFileSync(new URL('../migrations/0008_create_remote_runner_identities.sql', import.meta.url), 'utf8')
+const runnerControlMigration = readFileSync(new URL('../migrations/0009_persist_runner_control_state.sql', import.meta.url), 'utf8')
 
 test('the admission migration creates immutable provenance and append-only events', () => {
   const database = new Database(':memory:')
@@ -69,4 +70,8 @@ test('the fixture Runner migration stores only credential and lease digests', ()
   )`)
   expect(database.query('SELECT token_digest FROM runner_setup_tokens').get())
     .toEqual({ token_digest: 'setup-token-digest-only' })
+  database.exec(runnerControlMigration)
+  database.run(`INSERT INTO runner_commands VALUES ('command_v1_a', 'runner_homeserv1', 'profile.refresh', '{}', '2026-09-06T00:00:00.000Z')`)
+  database.run(`INSERT INTO runner_command_journal VALUES ('runner_homeserv1', 'command_v1_a', 'completed', '2026-09-06T00:01:00.000Z')`)
+  expect(database.query('SELECT state FROM runner_command_journal').get()).toEqual({ state: 'completed' })
 })

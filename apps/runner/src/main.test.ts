@@ -41,7 +41,7 @@ test('the deterministic Runner fixture uses the production polling protocol', as
     controlPlaneUrl: 'https://control.test',
     runnerId: 'runner_homeserv1',
     credential: 'r'.repeat(32),
-    profile: { release: 'test', platform: 'linux', architecture: 'arm64', runtime: 'Bun test', executor: 'fixture', capacity: 1 },
+    profile: { release: 'test', platform: 'linux', architecture: 'arm64', runtime: 'Bun test', executor: 'fixture', capacity: 1, logicalCpuCount: 1, memoryLimitBytes: 134_217_728 },
   }, request))
     .resolves.toBe('completed')
 })
