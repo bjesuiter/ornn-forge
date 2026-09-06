@@ -86,6 +86,6 @@ async function createControlStateSchema(): Promise<void> {
     env.ORNN_D1.prepare('CREATE TABLE runner_command_journal (runner_id TEXT, command_id TEXT, state TEXT, reported_at TEXT, PRIMARY KEY (runner_id, command_id))'),
     env.ORNN_D1.prepare('CREATE TABLE jobs (job_id TEXT PRIMARY KEY, state TEXT, cleanup_status TEXT, created_at TEXT, invocation_id TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE runner_leases (job_id TEXT PRIMARY KEY, runner_id TEXT, generation INTEGER, token_digest TEXT, expires_at TEXT, last_heartbeat_at TEXT, created_at TEXT)'),
-    env.ORNN_D1.prepare('CREATE TABLE invocations (invocation_id TEXT PRIMARY KEY, github_issue_number INTEGER, github_issue_title TEXT, github_issue_body TEXT, github_comment_body TEXT)'),
+    env.ORNN_D1.prepare('CREATE TABLE invocations (invocation_id TEXT PRIMARY KEY, github_repository_full_name TEXT, github_issue_number INTEGER, github_issue_title TEXT, github_issue_body TEXT, github_comment_body TEXT)'),
   ])
 }
