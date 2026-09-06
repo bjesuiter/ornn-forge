@@ -6,7 +6,10 @@
   "compatibility_flags": ["nodejs_compat"],
   "main": "src/server.ts",
   "vars": {
+    "BETTER_AUTH_URL": "https://ornn-forge.bjesuiter.workers.dev",
+    "DASHBOARD_OPERATOR_GITHUB_IDS": "2365676",
     "GITHUB_APP_INSTALLATION_ID": "159365588",
+    "GITHUB_CLIENT_ID": "Iv23livaCskLFocJZnOQ",
     "GITHUB_REPOSITORY_ID": "1296836371",
     "GITHUB_REPOSITORY_FULL_NAME": "bjesuiter/ornn-forge"
   },
