@@ -4,6 +4,22 @@ Ornn Forge receives bounded work from GitHub and returns inspectable results pro
 
 ## Language
 
+**Operator**:
+A GitHub account explicitly authorized to use Ornn Forge's control plane. Browser dashboard sessions and API bearer credentials are separate ways to establish one Operator's identity.
+_Avoid_: Admin, user
+
+**Operator bearer credential**:
+A static secret bound to one Operator and accepted only by the control-plane API.
+_Avoid_: Login credential, dashboard session
+
+**Dashboard session**:
+A time-limited browser session that identifies an Operator for access to the control-plane dashboard. It does not authorize the control-plane API.
+_Avoid_: Operator bearer credential, API token
+
+**Rejected dashboard login**:
+A retained record that a GitHub identity outside the Operator allowlist attempted to obtain a Dashboard session.
+_Avoid_: Failed Invocation, API authorization failure
+
 **Invocation**:
 An explicit, authorized request for Ornn Forge to act on a GitHub issue or pull request.
 _Avoid_: Trigger, command

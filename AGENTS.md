@@ -13,3 +13,7 @@ Use the five canonical triage labels without overrides. See `docs/agents/triage-
 ### Domain docs
 
 This repository uses the single-context domain-doc layout. See `docs/agents/domain.md`.
+
+### Test scope
+
+Before proposing a test, identify the nontrivial Ornn-owned behavior it protects or the known regression it covers. Do not propose tests for trivial behavior or behavior owned by a framework or library unless an issue requires it.
