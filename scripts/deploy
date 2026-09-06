@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+
+project_directory=$(CDPATH= cd "$(dirname "$0")/.." && pwd -P)
+cd "$project_directory"
+
+config_file=wrangler.jsonc
+account_id=$(sed -nE 's/^[[:space:]]*"account_id"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$config_file" | head -n 1)
+database_name=$(sed -nE 's/^[[:space:]]*"database_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$config_file" | head -n 1)
+
+if [ -z "$account_id" ] || [ -z "$database_name" ]; then
+  echo "Could not read account_id or D1 database_name from $config_file" >&2
+  exit 65
+fi
+
+export CLOUDFLARE_ACCOUNT_ID="$account_id"
+
+bun run build
+wrangler d1 migrations apply "$database_name" --remote --config "$config_file"
+wrangler deploy --keep-vars

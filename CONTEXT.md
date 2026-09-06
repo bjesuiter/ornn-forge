@@ -124,6 +124,10 @@ _Avoid_: Runner daemon, worker, agent
 The maximum number of capacity reservations a Runner may hold concurrently. A job retains its reservation until sandbox cleanup is verified, including while cleanup is pending or failed.
 _Avoid_: Worker count, parallelism
 
+**Runner pause**:
+An Operator-controlled state that prevents a Runner from receiving new Job leases. It does not stop a Job the Runner is already executing.
+_Avoid_: Offline state, cancellation
+
 **Capacity reservation**:
 A Runner slot held from job admission until verified sandbox cleanup. A quarantined sandbox continues to hold its reservation after execution ends.
 _Avoid_: Worker slot, concurrency token

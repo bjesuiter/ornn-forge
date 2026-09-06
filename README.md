@@ -34,17 +34,25 @@ bun run dev
 ## D1 setup and deployed smoke check
 
 Provision a dedicated D1 database named `ornn-forge` in the intended Cloudflare
-account and apply the checked-in migration before deploying. The committed
-`ORNN_D1` binding points to that name:
+account. The committed `ORNN_D1` binding points to that name:
 
 ```sh
-wrangler d1 migrations apply ornn-forge --remote
 wrangler secret put GITHUB_WEBHOOK_SECRET
 wrangler secret put OPERATOR_BEARER_SECRET
 wrangler secret put ORNN_RUNNER_CREDENTIAL_SECRET
 wrangler secret put GITHUB_APP_ID
 wrangler secret put GITHUB_APP_PRIVATE_KEY < /secure/path/to/github-app-private-key.pem
 ```
+
+Deploy with one command:
+
+```sh
+bun run deploy
+```
+
+The deploy script builds the Worker, applies every pending remote D1 migration,
+then deploys while preserving Dashboard-set variables. It loads the Cloudflare
+API token from the `ops` Varlock profile.
 
 Set `ORNN_RUNNER_CREDENTIAL_ID` as a non-secret Worker variable and provision the
 same 256-bit `ORNN_RUNNER_CREDENTIAL_SECRET` only to the `homeserv1` Runner. The

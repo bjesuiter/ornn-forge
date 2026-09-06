@@ -172,6 +172,42 @@ test('leases one pending Job to its authenticated Runner and records its fixture
   expect(calls[1]).toContain('update:17:Ornn Analyze Job completed: Fixture analysis complete')
 })
 
+test('a paused Runner receives no new lease until an Operator resumes it', async () => {
+  const store = createInMemoryInvocationStore()
+  const app = createControlPlane({
+    store,
+    githubWebhookSecret: webhookSecret,
+    githubInstallationId: '42',
+    githubRepositoryId: '99',
+    operatorBearerSecret: operatorSecret,
+    runnerCredentialId: 'runner_homeserv1',
+    runnerCredentialSecret: 'r'.repeat(32),
+  })
+  const poll = () => app.fetch(new Request('https://ornn.example/api/v1/runner/poll', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${'r'.repeat(32)}`,
+      'content-type': 'application/json',
+      'x-ornn-runner-id': 'runner_homeserv1',
+    },
+    body: JSON.stringify(envelope('runner.poll', { runnerId: 'runner_homeserv1' })),
+  }))
+
+  expect(await (await poll()).json()).toMatchObject({ type: 'runner.no_work' })
+  expect(await store.setRunnerPaused?.('runner_homeserv1', true)).toBe(true)
+  const admitted = await app.fetch(await signedWebhookRequest('delivery-paused-runner-1', issueComment()))
+  const { jobId } = await admitted.json() as { jobId: string }
+
+  expect(await (await poll()).json()).toMatchObject({ type: 'runner.no_work' })
+  const pending = await app.fetch(new Request(`https://ornn.example/api/v1/jobs/${jobId}`, {
+    headers: { authorization: `Bearer ${operatorSecret}` },
+  }))
+  expect(await pending.json()).toMatchObject({ job: { state: 'pending' } })
+
+  expect(await store.setRunnerPaused?.('runner_homeserv1', false)).toBe(true)
+  expect(await (await poll()).json()).toMatchObject({ type: 'runner.lease', payload: { jobId } })
+})
+
 test('rejects unsupported protocol and wrong lease tokens without changing the pending Job', async () => {
   const app = createControlPlane({
     store: createInMemoryInvocationStore(), githubWebhookSecret: webhookSecret, githubInstallationId: '42', githubRepositoryId: '99',

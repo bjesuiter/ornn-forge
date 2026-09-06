@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "env:ops": "DEV_ENV=ops varlock load",
-    "deploy": "bun run build && DEV_ENV=ops varlock run -- wrangler deploy",
+    "deploy": "DEV_ENV=ops varlock run -- scripts/deploy",
     "cf-typegen": "wrangler types",
     "test": "bun test",
     "runner:fixture": "bun run --filter @ornn-forge/runner fixture",

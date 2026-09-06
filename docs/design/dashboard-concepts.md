@@ -2,9 +2,10 @@
 
 Die drei Themes teilen Inhalte und Bedienelemente, unterscheiden sich aber in
 Raumaufteilung, Materialfarben und Bildkomposition. Das Menü „Design ansehen“
-unter `/dashboard/examples` wechselt zwischen ihnen. `/dashboard` bleibt ein
-einfacher Platzhalter im aufgehellten Vulkanschmiede-Theme. Beide Routen sind
-durch dieselbe Dashboard session geschützt.
+unter `/dashboard/examples` wechselt zwischen ihnen. `/dashboard` beginnt mit
+einer schlanken Live-Übersicht aller registrierten Runner im aufgehellten
+Vulkanschmiede-Theme. Beide Routen sind durch dieselbe Dashboard session
+geschützt.
 
 | Theme                                     | Charakter                                    | Aufbau                                                 | URL                                |
 | ----------------------------------------- | -------------------------------------------- | ------------------------------------------------------ | ---------------------------------- |
@@ -20,3 +21,9 @@ Bildführung und Grenzen für den weiteren Ausbau.
 Alle drei Ansichten verwenden dieselben markierten Beispieldaten. Vulkanschmiede
 und Ahnenholz sind bewusst aufgehellt, damit Arbeitsflächen und Metadaten auch
 auf Monitoren mit schwacher Schattendarstellung erkennbar bleiben.
+
+Die Produktionsroute zeigt ohne zusätzliche Navigation Online-Status, einen
+gegebenenfalls aktiven Job und den Link zum betroffenen GitHub-Issue. Ein
+Runner gilt nach einem erfolgreichen Kontakt für 20 Sekunden als online.
+Weitere Dashboard-Struktur folgt erst bei Bedarf; `/dashboard/examples` bleibt
+ausschließlich eine Designvorschau.

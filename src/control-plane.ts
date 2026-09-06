@@ -96,6 +96,7 @@ export interface InvocationStore {
   inspectMessage?(ornnMessageId: string): Promise<JobInspection | undefined>
   authenticateRunner?(runnerId: string, credentialDigest: string): Promise<boolean>
   pollRunner?(runnerId: string): Promise<LeaseGrant | undefined>
+  setRunnerPaused?(runnerId: string, paused: boolean): Promise<boolean>
   heartbeatLease?(input: LeaseInput): Promise<boolean>
   completeLease?(input: LeaseInput & { artifact: AnalysisArtifact }): Promise<'accepted' | 'invalid_artifact'>
   recordMessagePublication?(jobId: string, update: { githubCommentId?: string; attempt: OrnnMessageState['latestAttempt'] }): Promise<void>
@@ -533,6 +534,7 @@ export function createInMemoryInvocationStore(): InvocationStore {
   const recordsByDelivery = new Map<string, StoredRecord>()
   const inspectionsByJob = new Map<string, JobInspection>()
   const runnerCredentials = new Map<string, string>()
+  const pausedRunners = new Set<string>()
   const leasesByJob = new Map<string, {
     runnerId: string
     tokenDigest: string
@@ -576,6 +578,7 @@ export function createInMemoryInvocationStore(): InvocationStore {
       return existing === credentialDigest
     },
     async pollRunner(runnerId) {
+      if (pausedRunners.has(runnerId)) return undefined
       if ([...leasesByJob.values()].some((lease) => lease.runnerId === runnerId)) return undefined
       const inspection = [...inspectionsByJob.values()].find((candidate) => candidate.job.state === 'pending')
       if (!inspection) return undefined
@@ -597,6 +600,12 @@ export function createInMemoryInvocationStore(): InvocationStore {
           comment: inspection.invocation.github.comment.body,
         },
       }
+    },
+    async setRunnerPaused(runnerId, paused) {
+      if (!runnerCredentials.has(runnerId)) return false
+      if (paused) pausedRunners.add(runnerId)
+      else pausedRunners.delete(runnerId)
+      return true
     },
     async heartbeatLease(input) {
       const lease = await matchingLease(leasesByJob, input)
@@ -690,7 +699,7 @@ async function buildRecord(delivery: DeliveryInput): Promise<StoredRecord> {
   }
 }
 
-export function createD1InvocationStore(database: D1Database): InvocationStore {
+export function createD1InvocationStore(database: D1Database) {
   return new D1InvocationStore(database)
 }
 
@@ -856,7 +865,11 @@ class D1InvocationStore implements InvocationStore {
       VALUES (?, ?, ?) ON CONFLICT(runner_id) DO NOTHING`).bind(_runnerId, _credentialDigest, createdAt).run()
     const stored = await this.database.prepare('SELECT credential_digest FROM runner_credentials WHERE runner_id = ?')
       .bind(_runnerId).first<{ credential_digest: string }>()
-    return stored?.credential_digest === _credentialDigest
+    if (stored?.credential_digest !== _credentialDigest) return false
+    await this.database.prepare(`INSERT INTO runner_presence (runner_id, last_seen_at)
+      VALUES (?, ?) ON CONFLICT(runner_id) DO UPDATE SET last_seen_at = excluded.last_seen_at`)
+      .bind(_runnerId, createdAt).run()
+    return true
   }
 
   async pollRunner(runnerId: string): Promise<LeaseGrant | undefined> {
@@ -878,8 +891,9 @@ class D1InvocationStore implements InvocationStore {
     const eventPayloadSha256 = await sha256(eventPayload)
     await this.database.batch([
       this.database.prepare(`INSERT INTO runner_leases (job_id, runner_id, generation, token_digest, expires_at, last_heartbeat_at, created_at)
-        SELECT ?, ?, 1, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'pending')`).bind(
-        candidate.job_id, runnerId, tokenDigest, expiresAt, now, now, candidate.job_id,
+        SELECT ?, ?, 1, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'pending')
+        AND NOT EXISTS (SELECT 1 FROM runner_pauses WHERE runner_id = ? AND paused = 1)`).bind(
+        candidate.job_id, runnerId, tokenDigest, expiresAt, now, now, candidate.job_id, runnerId,
       ),
       this.database.prepare(`UPDATE jobs SET state = 'leased' WHERE job_id = ? AND state = 'pending'
         AND EXISTS (SELECT 1 FROM runner_leases WHERE job_id = ? AND token_digest = ?)`).bind(candidate.job_id, candidate.job_id, tokenDigest),
@@ -904,6 +918,15 @@ class D1InvocationStore implements InvocationStore {
         comment: candidate.github_comment_body,
       },
     }
+  }
+
+  async setRunnerPaused(runnerId: string, paused: boolean): Promise<boolean> {
+    const result = await this.database.prepare(`INSERT INTO runner_pauses (runner_id, paused, updated_at)
+      SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM runner_credentials WHERE runner_id = ?)
+      ON CONFLICT(runner_id) DO UPDATE SET paused = excluded.paused, updated_at = excluded.updated_at`).bind(
+      runnerId, paused ? 1 : 0, new Date().toISOString(), runnerId,
+    ).run()
+    return result.meta.changes === 1
   }
 
   async heartbeatLease(input: LeaseInput): Promise<boolean> {
