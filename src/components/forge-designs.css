@@ -1324,6 +1324,11 @@
   white-space: nowrap;
 }
 .fd-webhook-meta { margin-top: 4px !important; }
+.fd-webhook-runner {
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
 .fd-webhook-status {
   color: var(--muted);
   font-size: 11px !important;

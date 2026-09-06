@@ -5,6 +5,7 @@ export type DashboardWebhook = {
   issueTitle: string
   receivedAt: string
   source: 'issue' | 'comment'
+  runnerId?: string
   status: 'queued' | 'running' | 'completed' | 'message_uncertain'
 }
 
@@ -16,16 +17,18 @@ type DashboardWebhookRow = {
   github_comment_id: string
   accepted_at: string
   state: 'pending' | 'leased' | 'succeeded'
+  runner_id: string | null
   latest_attempt: 'pending' | 'succeeded' | 'uncertain' | 'failed' | null
 }
 
 export async function listDashboardWebhooks(database: D1Database): Promise<DashboardWebhook[]> {
   const result = await database.prepare(`SELECT d.github_delivery_id, i.github_repository_full_name,
-    i.github_issue_number, i.github_issue_title, i.github_comment_id, d.accepted_at, j.state,
+    i.github_issue_number, i.github_issue_title, i.github_comment_id, d.accepted_at, j.state, l.runner_id,
     m.latest_attempt
     FROM deliveries d
     JOIN invocations i ON i.invocation_id = d.invocation_id
     JOIN jobs j ON j.job_id = d.job_id
+    LEFT JOIN runner_leases l ON l.job_id = j.job_id
     LEFT JOIN ornn_messages m ON m.job_id = j.job_id
     ORDER BY d.accepted_at DESC, d.github_delivery_id DESC
     LIMIT 50`).all<DashboardWebhookRow>()
@@ -41,6 +44,7 @@ export function dashboardWebhooksFromRows(rows: DashboardWebhookRow[]): Dashboar
     issueTitle: row.github_issue_title,
     receivedAt: row.accepted_at,
     source: row.github_comment_id.startsWith('issue-description:') ? 'issue' : 'comment',
+    runnerId: row.runner_id ?? undefined,
     status: webhookStatus(row.state, row.latest_attempt),
   }))
 }

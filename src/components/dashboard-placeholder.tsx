@@ -102,6 +102,7 @@ export function Dashboard({
                       </p>
                       <p className="fd-webhook-meta">
                         {webhook.source === 'comment' ? 'Kommentar-Webhook' : 'Issue-Webhook'} · {relativeTime(webhook.receivedAt)}
+                        {webhook.runnerId && <> · Bearbeitet von <span className="fd-webhook-runner">{webhook.runnerId}</span></>}
                       </p>
                     </div>
                     <p className={`fd-webhook-status is-${webhook.status}`}>{webhookStatusLabel(webhook.status)}</p>
