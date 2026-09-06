@@ -10,5 +10,10 @@ declare namespace Cloudflare {
     ORNN_RUNNER_CREDENTIAL_SECRET: string
     GITHUB_APP_ID: string
     GITHUB_APP_PRIVATE_KEY: string
+    BETTER_AUTH_SECRET: string
+    BETTER_AUTH_URL: string
+    DASHBOARD_OPERATOR_GITHUB_IDS: string
+    GITHUB_CLIENT_ID: string
+    GITHUB_CLIENT_SECRET: string
   }
 }

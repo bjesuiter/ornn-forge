@@ -9,15 +9,33 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiV1RunnerOperationRouteImport } from './routes/api/v1/runner/$operation'
 import { Route as ApiV1MessagesOrnnMessageIdRouteImport } from './routes/api/v1/messages/$ornnMessageId'
 import { Route as ApiV1JobsJobIdRouteImport } from './routes/api/v1/jobs/$jobId'
 import { Route as ApiV1GithubWebhookRouteImport } from './routes/api/v1/github/webhook'
 
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DashboardRoute = DashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiV1RunnerOperationRoute = ApiV1RunnerOperationRouteImport.update({
@@ -44,6 +62,9 @@ const ApiV1GithubWebhookRoute = ApiV1GithubWebhookRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/dashboard': typeof DashboardRoute
+  '/login': typeof LoginRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
   '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
   '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
@@ -51,6 +72,9 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/dashboard': typeof DashboardRoute
+  '/login': typeof LoginRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
   '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
   '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
@@ -59,6 +83,9 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/dashboard': typeof DashboardRoute
+  '/login': typeof LoginRoute
+  '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
   '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
   '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
@@ -68,6 +95,9 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/dashboard'
+    | '/login'
+    | '/api/auth/$'
     | '/api/v1/github/webhook'
     | '/api/v1/jobs/$jobId'
     | '/api/v1/messages/$ornnMessageId'
@@ -75,6 +105,9 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/dashboard'
+    | '/login'
+    | '/api/auth/$'
     | '/api/v1/github/webhook'
     | '/api/v1/jobs/$jobId'
     | '/api/v1/messages/$ornnMessageId'
@@ -82,6 +115,9 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/dashboard'
+    | '/login'
+    | '/api/auth/$'
     | '/api/v1/github/webhook'
     | '/api/v1/jobs/$jobId'
     | '/api/v1/messages/$ornnMessageId'
@@ -90,6 +126,9 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DashboardRoute: typeof DashboardRoute
+  LoginRoute: typeof LoginRoute
+  ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiV1GithubWebhookRoute: typeof ApiV1GithubWebhookRoute
   ApiV1JobsJobIdRoute: typeof ApiV1JobsJobIdRoute
   ApiV1MessagesOrnnMessageIdRoute: typeof ApiV1MessagesOrnnMessageIdRoute
@@ -98,11 +137,32 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dashboard': {
+      id: '/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof DashboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof ApiAuthSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/v1/runner/$operation': {
@@ -138,6 +198,9 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DashboardRoute: DashboardRoute,
+  LoginRoute: LoginRoute,
+  ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiV1GithubWebhookRoute: ApiV1GithubWebhookRoute,
   ApiV1JobsJobIdRoute: ApiV1JobsJobIdRoute,
   ApiV1MessagesOrnnMessageIdRoute: ApiV1MessagesOrnnMessageIdRoute,
