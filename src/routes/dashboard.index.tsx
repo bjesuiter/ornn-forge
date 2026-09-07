@@ -4,6 +4,7 @@ import { authClient } from '../auth-client'
 import { Dashboard } from '../components/dashboard-placeholder'
 import {
   completeDashboardOpenAiSubscriptionAuthorization,
+  createDashboardRunner,
   disconnectDashboardOpenAiSubscription,
   getDashboardOpenAiUsage,
   getDashboardRunners,
@@ -44,6 +45,12 @@ function DashboardRoute() {
     await router.invalidate()
   }
 
+  async function createRunner(capacity: number) {
+    const created = await createDashboardRunner({ data: { capacity } })
+    await router.invalidate()
+    return created
+  }
+
   async function startOpenAiSubscriptionAuthorization() {
     await startDashboardOpenAiSubscriptionAuthorization()
     await router.invalidate()
@@ -65,6 +72,7 @@ function DashboardRoute() {
     webhooks={webhooks}
     onSignOut={signOut}
     onSetRunnerPaused={setRunnerPaused}
+    onCreateRunner={createRunner}
     onStartOpenAiSubscriptionAuthorization={startOpenAiSubscriptionAuthorization}
     onCompleteOpenAiSubscriptionAuthorization={completeOpenAiSubscriptionAuthorization}
     onDisconnectOpenAiSubscription={disconnectOpenAiSubscription}

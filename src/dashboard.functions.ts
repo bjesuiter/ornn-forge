@@ -2,7 +2,7 @@ import { createServerFn } from '@tanstack/react-start'
 import { getRequestHeaders, setResponseHeader } from '@tanstack/react-start/server'
 import { env } from 'cloudflare:workers'
 import { auth } from './auth.server'
-import { createD1InvocationStore } from './control-plane'
+import { createD1InvocationStore, createRemoteRunnerSetup, type RemoteRunner } from './control-plane'
 import { listDashboardRunners } from './dashboard-runners'
 import { listDashboardWebhooks } from './dashboard-webhooks'
 import {
@@ -63,8 +63,25 @@ export const setDashboardRunnerPaused = createServerFn({ method: 'POST' })
     if (!updated) throw new Error('Runner not found')
   })
 
+export const createDashboardRunner = createServerFn({ method: 'POST' })
+  .validator((data: unknown) => {
+    if (!isRunnerCreationRequest(data)) throw new Error('Invalid Runner creation request')
+    return data
+  })
+  .handler(async ({ data }): Promise<{ runner: RemoteRunner; setupToken: string }> => {
+    const session = await auth.api.getSession({ headers: getRequestHeaders() })
+    if (!session) throw new Error('Dashboard session required')
+    return createRemoteRunnerSetup({ store: createD1InvocationStore(env.ORNN_D1) }, data.capacity)
+  })
+
 function isPauseRequest(value: unknown): value is { runnerId: string; paused: boolean } {
   return typeof value === 'object' && value !== null
     && 'runnerId' in value && typeof value.runnerId === 'string' && value.runnerId.length > 0 && value.runnerId.length <= 200
     && 'paused' in value && typeof value.paused === 'boolean'
+}
+
+function isRunnerCreationRequest(value: unknown): value is { capacity: number } {
+  return typeof value === 'object' && value !== null
+    && 'capacity' in value && typeof value.capacity === 'number' && Number.isInteger(value.capacity)
+    && value.capacity >= 1 && value.capacity <= 32
 }

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import type { RemoteRunner } from '../control-plane'
 import type { DashboardRunner } from '../dashboard-runners'
 import type { DashboardWebhook } from '../dashboard-webhooks'
 import type { OpenAiSubscriptionUsage } from '../openai-subscription-usage'
@@ -10,6 +11,7 @@ export function Dashboard({
   webhooks,
   onSignOut,
   onSetRunnerPaused,
+  onCreateRunner,
   onStartOpenAiSubscriptionAuthorization,
   onCompleteOpenAiSubscriptionAuthorization,
   onDisconnectOpenAiSubscription,
@@ -19,6 +21,7 @@ export function Dashboard({
   webhooks: DashboardWebhook[]
   onSignOut: () => Promise<void>
   onSetRunnerPaused: (runnerId: string, paused: boolean) => Promise<void>
+  onCreateRunner: (capacity: number) => Promise<{ runner: RemoteRunner; setupToken: string }>
   onStartOpenAiSubscriptionAuthorization: () => Promise<void>
   onCompleteOpenAiSubscriptionAuthorization: () => Promise<void>
   onDisconnectOpenAiSubscription: () => Promise<void>
@@ -27,6 +30,12 @@ export function Dashboard({
   const [error, setError] = useState(false)
   const [updatingRunnerId, setUpdatingRunnerId] = useState<string>()
   const [runnerError, setRunnerError] = useState(false)
+  const [showRunnerDialog, setShowRunnerDialog] = useState(false)
+  const [runnerCapacity, setRunnerCapacity] = useState(1)
+  const [creatingRunner, setCreatingRunner] = useState(false)
+  const [createdRunner, setCreatedRunner] = useState<{ runner: RemoteRunner; setupToken: string }>()
+  const [runnerSetupError, setRunnerSetupError] = useState(false)
+  const [setupTokenCopied, setSetupTokenCopied] = useState(false)
   const [showAllWebhooks, setShowAllWebhooks] = useState(false)
   const [updatingOpenAiSubscription, setUpdatingOpenAiSubscription] = useState(false)
   const [openAiSubscriptionError, setOpenAiSubscriptionError] = useState(false)
@@ -64,6 +73,41 @@ export function Dashboard({
       setOpenAiSubscriptionError(true)
     } finally {
       setUpdatingOpenAiSubscription(false)
+    }
+  }
+
+  function openRunnerDialog() {
+    setCreatedRunner(undefined)
+    setRunnerSetupError(false)
+    setSetupTokenCopied(false)
+    setShowRunnerDialog(true)
+  }
+
+  function closeRunnerDialog() {
+    if (creatingRunner) return
+    setShowRunnerDialog(false)
+  }
+
+  async function createRunner(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setCreatingRunner(true)
+    setRunnerSetupError(false)
+    try {
+      setCreatedRunner(await onCreateRunner(runnerCapacity))
+    } catch {
+      setRunnerSetupError(true)
+    } finally {
+      setCreatingRunner(false)
+    }
+  }
+
+  async function copySetupToken() {
+    if (!createdRunner || !navigator.clipboard) return
+    try {
+      await navigator.clipboard.writeText(createdRunner.setupToken)
+      setSetupTokenCopied(true)
+    } catch {
+      setSetupTokenCopied(false)
     }
   }
 
@@ -206,9 +250,14 @@ export function Dashboard({
         </section>
         <section className="fd-runner-overview" aria-labelledby="fd-title">
           <div className="fd-runner-overview-heading">
-            <p className="fd-kicker">Ornn Forge</p>
-            <h1 id="fd-title">Runner</h1>
-            <p>Alle registrierten Runner und ihre aktuelle Arbeit.</p>
+            <div>
+              <p className="fd-kicker">Ornn Forge</p>
+              <h1 id="fd-title">Runner</h1>
+              <p>Alle registrierten Runner und ihre aktuelle Arbeit.</p>
+            </div>
+            <button className="fd-runner-add" type="button" onClick={openRunnerDialog}>
+              Runner hinzufügen
+            </button>
           </div>
           {runners.length === 0 ? (
             <p className="fd-runner-empty">
@@ -335,6 +384,55 @@ export function Dashboard({
           </a>
         </footer>
       </main>
+      {showRunnerDialog && (
+        <dialog className="fd-runner-dialog" open aria-labelledby="fd-runner-dialog-title" onCancel={(event) => {
+          event.preventDefault()
+          closeRunnerDialog()
+        }}>
+          <div className="fd-runner-dialog-header">
+            <div>
+              <p className="fd-kicker">Neue Identität</p>
+              <h2 id="fd-runner-dialog-title">Runner hinzufügen</h2>
+            </div>
+            <button className="fd-dialog-close" type="button" aria-label="Dialog schließen" onClick={closeRunnerDialog} disabled={creatingRunner}>×</button>
+          </div>
+          {createdRunner ? (
+            <div className="fd-runner-setup-result">
+              <p className="fd-runner-setup-success">{createdRunner.runner.id} wartet auf die Einrichtung.</p>
+              <p>Übertrage dieses Setup-Token auf den neuen Runner. Es wird nur jetzt angezeigt und ist 15 Minuten gültig.</p>
+              <div className="fd-setup-token">
+                <code>{createdRunner.setupToken}</code>
+                <button type="button" onClick={() => void copySetupToken()}>{setupTokenCopied ? 'Kopiert' : 'Kopieren'}</button>
+              </div>
+              <p className="fd-runner-setup-note">Starte auf dem Runner <code>bun run runner:setup</code> und füge das Token bei der Abfrage ein.</p>
+              <button className="fd-dialog-primary" type="button" onClick={closeRunnerDialog}>Fertig</button>
+            </div>
+          ) : (
+            <form onSubmit={(event) => void createRunner(event)}>
+              <p className="fd-runner-dialog-description">Lege eine Runner-Identität an und erhalte ein einmaliges Setup-Token für die sichere Einrichtung.</p>
+              <label className="fd-runner-capacity" htmlFor="fd-runner-capacity">
+                <span>Gleichzeitige Jobs</span>
+                <input
+                  id="fd-runner-capacity"
+                  type="number"
+                  min="1"
+                  max="32"
+                  value={runnerCapacity}
+                  onChange={(event) => setRunnerCapacity(Math.min(32, Math.max(1, Number(event.target.value) || 1)))}
+                  disabled={creatingRunner}
+                  autoFocus
+                />
+                <small>Der Runner kann zwischen 1 und 32 Jobs gleichzeitig annehmen.</small>
+              </label>
+              {runnerSetupError && <p className="fd-error fd-runner-dialog-error" role="alert">Runner konnte nicht angelegt werden. Bitte erneut versuchen.</p>}
+              <div className="fd-dialog-actions">
+                <button className="fd-dialog-cancel" type="button" onClick={closeRunnerDialog} disabled={creatingRunner}>Abbrechen</button>
+                <button className="fd-dialog-primary" type="submit" disabled={creatingRunner}>{creatingRunner ? 'Wird angelegt …' : 'Runner anlegen'}</button>
+              </div>
+            </form>
+          )}
+        </dialog>
+      )}
     </div>
   )
 }

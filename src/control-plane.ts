@@ -172,13 +172,8 @@ export function createControlPlane(options: ControlPlaneOptions) {
         if (!isRemoteRunnerCreation(input) || !options.store.createRemoteRunner) {
           return json({ apiVersion: API_VERSION, error: { code: 'invalid_runner' } }, 422)
         }
-        const issuedToken = await issueSetupToken(options)
-        const runner = await options.store.createRemoteRunner({
-          id: opaqueId('runner'),
-          desiredCapacity: input.capacity,
-          ...issuedToken.record,
-        })
-        return json({ apiVersion: API_VERSION, runner, setupToken: issuedToken.value }, 201, { 'Cache-Control': 'no-store' })
+        const created = await createRemoteRunnerSetup({ store: options.store, now: options.now }, input.capacity)
+        return json({ apiVersion: API_VERSION, ...created }, 201, { 'Cache-Control': 'no-store' })
       }
 
       const setupTokenMatch = /^\/api\/v1\/runners\/([^/]+)\/setup-token$/.exec(url.pathname)
@@ -592,6 +587,22 @@ function isRemoteRunnerCreation(value: unknown): value is { capacity: number } {
     && value.capacity >= 1 && value.capacity <= 32
 }
 
+export async function createRemoteRunnerSetup(
+  options: Pick<ControlPlaneOptions, 'store' | 'now'>,
+  desiredCapacity: number,
+): Promise<{ runner: RemoteRunner; setupToken: string }> {
+  if (!Number.isInteger(desiredCapacity) || desiredCapacity < 1 || desiredCapacity > 32 || !options.store.createRemoteRunner) {
+    throw new Error('Invalid Remote Runner creation')
+  }
+  const issuedToken = await issueSetupToken(options)
+  const runner = await options.store.createRemoteRunner({
+    id: opaqueId('runner'),
+    desiredCapacity,
+    ...issuedToken.record,
+  })
+  return { runner, setupToken: issuedToken.value }
+}
+
 function isSetupTokenRequest(value: unknown): value is { setupToken: string } {
   return isObject(value) && typeof value.setupToken === 'string' && /^setup_v1_[A-Za-z0-9_-]{22}$/.test(value.setupToken)
 }
@@ -602,11 +613,11 @@ function isEnrollmentRequest(value: unknown): value is { setupToken: string; cre
     && /^[0-9a-f]{64}$/i.test(value.credentialDigest)
 }
 
-function currentTime(options: ControlPlaneOptions): string {
+function currentTime(options: Pick<ControlPlaneOptions, 'now'>): string {
   return (options.now ?? (() => new Date()))().toISOString()
 }
 
-async function issueSetupToken(options: ControlPlaneOptions): Promise<{ value: string; record: SetupTokenRecord }> {
+async function issueSetupToken(options: Pick<ControlPlaneOptions, 'now'>): Promise<{ value: string; record: SetupTokenRecord }> {
   const createdAt = currentTime(options)
   const value = opaqueId('setup')
   return {
