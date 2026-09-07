@@ -15,6 +15,7 @@ export function Dashboard({
   webhooks,
   onSignOut,
   onSetRunnerPaused,
+  onSetRunnerLabel,
   onCreateRunner,
   onStartOpenAiSubscriptionAuthorization,
   onCompleteOpenAiSubscriptionAuthorization,
@@ -25,6 +26,7 @@ export function Dashboard({
   webhooks: DashboardWebhook[]
   onSignOut: () => Promise<void>
   onSetRunnerPaused: (runnerId: string, paused: boolean) => Promise<void>
+  onSetRunnerLabel: (runnerId: string, label: string) => Promise<void>
   onCreateRunner: (capacity: number) => Promise<{ runner: RemoteRunner; setupToken: string }>
   onStartOpenAiSubscriptionAuthorization: () => Promise<void>
   onCompleteOpenAiSubscriptionAuthorization: () => Promise<void>
@@ -33,6 +35,8 @@ export function Dashboard({
   const [signingOut, setSigningOut] = useState(false)
   const [error, setError] = useState(false)
   const [updatingRunnerId, setUpdatingRunnerId] = useState<string>()
+  const [editingRunnerId, setEditingRunnerId] = useState<string>()
+  const [runnerLabel, setRunnerLabel] = useState('')
   const [runnerError, setRunnerError] = useState(false)
   const [showRunnerDialog, setShowRunnerDialog] = useState(false)
   const [runnerCapacity, setRunnerCapacity] = useState(1)
@@ -79,6 +83,27 @@ export function Dashboard({
     setRunnerError(false)
     try {
       await onSetRunnerPaused(runner.id, !runner.paused)
+    } catch {
+      setRunnerError(true)
+    } finally {
+      setUpdatingRunnerId(undefined)
+    }
+  }
+
+  function startEditingRunnerLabel(runner: DashboardRunner) {
+    setRunnerLabel(runner.label)
+    setEditingRunnerId(runner.id)
+  }
+
+  async function saveRunnerLabel(event: React.FormEvent<HTMLFormElement>, runner: DashboardRunner) {
+    event.preventDefault()
+    const label = runnerLabel.trim()
+    if (!label) return
+    setUpdatingRunnerId(runner.id)
+    setRunnerError(false)
+    try {
+      await onSetRunnerLabel(runner.id, label)
+      setEditingRunnerId(undefined)
     } catch {
       setRunnerError(true)
     } finally {
@@ -168,7 +193,7 @@ export function Dashboard({
         )}
         {runnerError && (
           <p className="fd-error" role="alert">
-            Runner-Status konnte nicht geändert werden. Bitte versuche es erneut.
+            Runner konnte nicht aktualisiert werden. Bitte versuche es erneut.
           </p>
         )}
         <section className="fd-openai-usage" aria-labelledby="fd-openai-usage-title">
@@ -293,7 +318,39 @@ export function Dashboard({
                 <li key={runner.id} className="fd-runner-row">
                   <div className="fd-runner-summary">
                     <div>
-                      <h2>{runner.id}</h2>
+                      {editingRunnerId === runner.id ? (
+                        <form className="fd-runner-label-form" onSubmit={(event) => void saveRunnerLabel(event, runner)}>
+                          <label>
+                            <input
+                              aria-label="Runner-Label"
+                              value={runnerLabel}
+                              onChange={(event) => setRunnerLabel(event.target.value)}
+                              maxLength={255}
+                              autoFocus
+                              disabled={updatingRunnerId === runner.id}
+                            />
+                          </label>
+                          <button type="submit" disabled={updatingRunnerId === runner.id || runnerLabel.trim().length === 0}>
+                            {updatingRunnerId === runner.id ? 'Speichert …' : 'Speichern'}
+                          </button>
+                          <button type="button" onClick={() => setEditingRunnerId(undefined)} disabled={updatingRunnerId === runner.id}>Abbrechen</button>
+                        </form>
+                      ) : (
+                        <div className="fd-runner-label-heading">
+                          <h2>{runner.label}</h2>
+                          <button
+                            className="fd-runner-label-edit"
+                            type="button"
+                            aria-label={`${runner.label} umbenennen`}
+                            title="Runner-Label bearbeiten"
+                            onClick={() => startEditingRunnerLabel(runner)}
+                            disabled={updatingRunnerId === runner.id}
+                          >
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z" /></svg>
+                          </button>
+                        </div>
+                      )}
+                      <p className="fd-runner-id">{runner.id}</p>
                       <div className="fd-runner-state">
                         <p className={`fd-runner-presence ${runner.online ? 'is-online' : 'is-offline'}`}>
                           <span aria-hidden="true" />

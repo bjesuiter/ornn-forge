@@ -9,6 +9,7 @@ import {
   getDashboardOpenAiUsage,
   getDashboardRunners,
   getDashboardWebhooks,
+  setDashboardRunnerLabel,
   setDashboardRunnerPaused,
   startDashboardOpenAiSubscriptionAuthorization,
 } from '../dashboard.functions'
@@ -45,6 +46,11 @@ function DashboardRoute() {
     await router.invalidate()
   }
 
+  async function setRunnerLabel(runnerId: string, label: string) {
+    await setDashboardRunnerLabel({ data: { runnerId, label } })
+    await router.invalidate()
+  }
+
   async function createRunner(capacity: number) {
     const created = await createDashboardRunner({ data: { capacity } })
     await router.invalidate()
@@ -72,6 +78,7 @@ function DashboardRoute() {
     webhooks={webhooks}
     onSignOut={signOut}
     onSetRunnerPaused={setRunnerPaused}
+    onSetRunnerLabel={setRunnerLabel}
     onCreateRunner={createRunner}
     onStartOpenAiSubscriptionAuthorization={startOpenAiSubscriptionAuthorization}
     onCompleteOpenAiSubscriptionAuthorization={completeOpenAiSubscriptionAuthorization}

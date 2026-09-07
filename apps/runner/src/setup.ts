@@ -1,3 +1,5 @@
+import { hostname as systemHostname } from 'node:os'
+
 export type SetupRunner = { id: string; desiredCapacity: number }
 
 type SetupRequest = (input: URL, init?: RequestInit) => Promise<Response>
@@ -7,12 +9,14 @@ export async function enrollRemoteRunner({
   setupToken,
   createCredential = createRunnerCredential,
   persistCredential,
+  hostname = systemHostname,
   request = fetch,
 }: {
   controlPlaneUrl: string
   setupToken: string
   createCredential?: () => string
   persistCredential: (input: { runnerId: string; credential: string }) => Promise<void>
+  hostname?: () => string
   request?: SetupRequest
 }): Promise<SetupRunner> {
   const preflight = await request(new URL('/api/v1/runner/setup/preflight', controlPlaneUrl), {
@@ -28,7 +32,7 @@ export async function enrollRemoteRunner({
   const enrolled = await request(new URL('/api/v1/runner/setup/enroll', controlPlaneUrl), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ setupToken, credentialDigest: await sha256Hex(credential) }),
+    body: JSON.stringify({ setupToken, credentialDigest: await sha256Hex(credential), label: hostname() }),
   })
   if (!enrolled.ok) throw new Error('Remote Runner enrollment failed')
   return runner

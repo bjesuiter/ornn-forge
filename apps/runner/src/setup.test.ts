@@ -12,6 +12,7 @@ test('the setup flow preflights before persisting a credential and finalizes wit
     setupToken: 'setup_v1_abcdefghijklmnopqrstuv',
     createCredential: () => credential,
     persistCredential: async (value) => { persisted.push(value) },
+    hostname: () => 'forge-01',
     request: async (input, init) => {
       const path = new URL(input).pathname
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>
@@ -20,7 +21,7 @@ test('the setup flow preflights before persisting a credential and finalizes wit
         return Response.json({ runner: { id: 'runner_v1_abcdefghijklmnopqrstuv', desiredCapacity: 2 } })
       }
       expect(persisted).toEqual([{ runnerId: 'runner_v1_abcdefghijklmnopqrstuv', credential }])
-      expect(body).toEqual({ setupToken: 'setup_v1_abcdefghijklmnopqrstuv', credentialDigest: await sha256Hex(credential) })
+      expect(body).toEqual({ setupToken: 'setup_v1_abcdefghijklmnopqrstuv', credentialDigest: await sha256Hex(credential), label: 'forge-01' })
       return Response.json({ runner: { id: 'runner_v1_abcdefghijklmnopqrstuv' } }, { status: 201 })
     },
   })
@@ -69,6 +70,7 @@ test('the Runner setup client enrolls a separately created identity through the 
     setupToken,
     createCredential: () => credential,
     persistCredential: async () => { persisted = true },
+    hostname: () => 'forge-01',
     request: async (input, init) => {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>
       transportedBodies.push(body)
@@ -81,6 +83,7 @@ test('the Runner setup client enrolls a separately created identity through the 
   expect(runner.id).not.toBe('runner_homeserv1')
   expect(persisted).toBe(true)
   expect(transportedBodies).toHaveLength(2)
+  expect(transportedBodies[1]).toMatchObject({ label: 'forge-01' })
   expect((await app.fetch(new Request('https://control.test/api/v1/runner/setup/preflight', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ setupToken }),
   }))).status).toBe(401)

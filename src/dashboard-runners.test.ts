@@ -11,12 +11,14 @@ const migrations = [
   '0007_record_runner_diagnostics.sql',
   '0008_create_remote_runner_identities.sql',
   '0011_add_runner_hardware_model.sql',
+  '0012_add_runner_labels.sql',
 ].map((name) => readFileSync(new URL(`../migrations/${name}`, import.meta.url), 'utf8'))
 
 test('the dashboard keeps runner presence, pause, faults, capacity, and work as independent dimensions', () => {
   const runners = dashboardRunnersFromRows([
     {
       runner_id: 'runner_homeserv1',
+      label: 'forge-01',
       enrollment_state: 'enrolled',
       readiness_state: 'ready',
       desired_capacity: 2,
@@ -59,6 +61,7 @@ test('the dashboard keeps runner presence, pause, faults, capacity, and work as 
 
   expect(runners).toEqual([{
     id: 'runner_homeserv1',
+    label: 'forge-01',
     enrollment: 'enrolled',
     ready: true,
     desiredCapacity: 2,
@@ -89,7 +92,7 @@ test('the dashboard keeps runner presence, pause, faults, capacity, and work as 
 test('the dashboard query keeps enrollment, readiness, and presence separate', async () => {
   const database = new Database(':memory:')
   for (const migration of migrations) database.exec(migration)
-  database.run(`INSERT INTO remote_runners VALUES
+  database.run(`INSERT INTO remote_runners (runner_id, kind, desired_capacity, enrollment_state, readiness_state, created_at) VALUES
     ('runner_awaiting', 'remote', 2, 'awaiting_setup', 'not_ready', '2026-09-06T12:00:00.000Z'),
     ('runner_enrolled', 'remote', 3, 'enrolled', 'ready', '2026-09-06T12:00:00.000Z')`)
   database.run("INSERT INTO runner_credentials VALUES ('runner_enrolled', 'digest-only', '2026-09-06T12:00:00.000Z')")
@@ -97,9 +100,9 @@ test('the dashboard query keeps enrollment, readiness, and presence separate', a
 
   const runners = await listDashboardRunners(sqliteDashboardDatabase(database), new Date('2026-09-06T12:00:05.000Z'))
 
-  expect(runners.map(({ id, enrollment, ready, online, desiredCapacity }) => ({ id, enrollment, ready, online, desiredCapacity }))).toEqual([
-    { id: 'runner_awaiting', enrollment: 'awaiting_setup', ready: false, online: false, desiredCapacity: 2 },
-    { id: 'runner_enrolled', enrollment: 'enrolled', ready: true, online: true, desiredCapacity: 3 },
+  expect(runners.map(({ id, label, enrollment, ready, online, desiredCapacity }) => ({ id, label, enrollment, ready, online, desiredCapacity }))).toEqual([
+    { id: 'runner_awaiting', label: 'Unbenannt', enrollment: 'awaiting_setup', ready: false, online: false, desiredCapacity: 2 },
+    { id: 'runner_enrolled', label: 'Unbenannt', enrollment: 'enrolled', ready: true, online: true, desiredCapacity: 3 },
   ])
 })
 

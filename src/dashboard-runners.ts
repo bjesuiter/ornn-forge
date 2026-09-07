@@ -1,5 +1,6 @@
 export type DashboardRunner = {
   id: string
+  label: string
   enrollment: 'awaiting_setup' | 'enrolled'
   ready: boolean
   desiredCapacity: number
@@ -47,6 +48,7 @@ const onlineWindowMs = 20_000
 
 type DashboardRunnerRow = {
   runner_id: string
+  label: string
   enrollment_state: 'awaiting_setup' | 'enrolled'
   readiness_state: 'not_ready' | 'ready'
   desired_capacity: number
@@ -96,7 +98,7 @@ export async function listDashboardRunners(
 ): Promise<DashboardRunner[]> {
   const onlineSince = new Date(now.getTime() - onlineWindowMs).toISOString()
   const [runners, activeJobs, completedJobs] = await Promise.all([
-    database.prepare(`SELECT runner.runner_id, runner.enrollment_state, runner.readiness_state, runner.desired_capacity,
+    database.prepare(`SELECT runner.runner_id, runner.label, runner.enrollment_state, runner.readiness_state, runner.desired_capacity,
       p.last_seen_at, COALESCE(paused.paused, 0) AS paused,
       fault.code AS fault_code, fault.occurred_at AS fault_occurred_at,
       profile.release, profile.platform, profile.architecture, profile.runtime, profile.executor, profile.hardware_model,
@@ -147,6 +149,7 @@ export function dashboardRunnersFromRows(
     const recentJobs = completedJobs.get(runner.runner_id) ?? []
     return {
       id: runner.runner_id,
+      label: runner.label,
       enrollment: runner.enrollment_state,
       ready: runner.readiness_state === 'ready',
       desiredCapacity: runner.desired_capacity,

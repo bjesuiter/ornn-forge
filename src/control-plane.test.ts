@@ -156,15 +156,18 @@ test('issues independent, short-lived, one-time Setup tokens for Remote Runner e
   expect((await setupRequest('/api/v1/runner/setup/enroll', {
     setupToken: second.setupToken,
     credentialDigest: 'a'.repeat(64),
+    label: 'forge-01',
   })).status).toBe(201)
   expect((await setupRequest('/api/v1/runner/setup/enroll', {
     setupToken: second.setupToken,
     credentialDigest: 'a'.repeat(64),
+    label: 'forge-01',
   })).status).toBe(201)
   expect((await setupRequest('/api/v1/runner/setup/preflight', { setupToken: second.setupToken })).status).toBe(401)
   expect((await setupRequest('/api/v1/runner/setup/enroll', {
     setupToken: second.setupToken,
     credentialDigest: 'b'.repeat(64),
+    label: 'forge-01',
   })).status).toBe(401)
 
   now = new Date('2026-09-06T12:16:00.000Z')
@@ -210,7 +213,7 @@ test('authenticates an enrolled base64url Runner credential on its WebSocket upg
     tokenId: 'setup_token_v1_abcdefghijklmnopqrstuv', tokenDigest: 'setup-digest',
     createdAt: '2026-09-07T00:00:00.000Z', expiresAt: '2026-09-07T00:15:00.000Z',
   })
-  await store.enrollRemoteRunner?.({ tokenDigest: 'setup-digest', credentialDigest, now: '2026-09-07T00:01:00.000Z' })
+  await store.enrollRemoteRunner?.({ tokenDigest: 'setup-digest', credentialDigest, label: 'forge-01', now: '2026-09-07T00:01:00.000Z' })
   let selectedRunner: string | undefined
   const app = createControlPlane({
     store, githubWebhookSecret: webhookSecret, githubInstallationId: '42', githubRepositoryId: '99', operatorBearerSecret: operatorSecret,
@@ -223,6 +226,23 @@ test('authenticates an enrolled base64url Runner credential on its WebSocket upg
 
   expect(response.status).toBe(200)
   expect(selectedRunner).toBe('runner_v1_abcdefghijklmnopqrstuv')
+})
+
+test('names a newly created Runner on enrollment and permits an operator label change', async () => {
+  const store = createInMemoryInvocationStore()
+  const created = await store.createRemoteRunner?.({
+    id: 'runner_v1_abcdefghijklmnopqrstuv', desiredCapacity: 1,
+    tokenId: 'setup_token_v1_abcdefghijklmnopqrstuv', tokenDigest: 'setup-digest',
+    createdAt: '2026-09-07T00:00:00.000Z', expiresAt: '2026-09-07T00:15:00.000Z',
+  })
+
+  expect(created?.label).toBe('Unbenannt')
+  const enrolled = await store.enrollRemoteRunner?.({
+    tokenDigest: 'setup-digest', credentialDigest: 'a'.repeat(64), label: 'forge-01', now: '2026-09-07T00:01:00.000Z',
+  })
+  expect(enrolled?.label).toBe('forge-01')
+  await expect(store.setRunnerLabel?.(enrolled!.id, 'Büro Mac mini')).resolves.toBe(true)
+  expect(enrolled?.label).toBe('Büro Mac mini')
 })
 
 test('does not expose legacy Runner polling when the Worker uses enrolled Runner credentials', async () => {
