@@ -5,6 +5,10 @@ import type { DashboardWebhook } from '../dashboard-webhooks'
 import type { OpenAiSubscriptionUsage } from '../openai-subscription-usage'
 import './forge-designs.css'
 
+const setupTokenLifetimeMs = 15 * 60_000
+
+type CreatedRunner = { runner: RemoteRunner; setupToken: string; setupExpiresAt: number }
+
 export function Dashboard({
   openAiUsage,
   runners,
@@ -33,7 +37,8 @@ export function Dashboard({
   const [showRunnerDialog, setShowRunnerDialog] = useState(false)
   const [runnerCapacity, setRunnerCapacity] = useState(1)
   const [creatingRunner, setCreatingRunner] = useState(false)
-  const [createdRunner, setCreatedRunner] = useState<{ runner: RemoteRunner; setupToken: string }>()
+  const [createdRunner, setCreatedRunner] = useState<CreatedRunner>()
+  const [currentTime, setCurrentTime] = useState(Date.now())
   const [runnerSetupError, setRunnerSetupError] = useState(false)
   const [setupTokenCopied, setSetupTokenCopied] = useState(false)
   const [showAllWebhooks, setShowAllWebhooks] = useState(false)
@@ -44,6 +49,18 @@ export function Dashboard({
   useEffect(() => {
     if (showRunnerDialog && runnerDialog.current && !runnerDialog.current.open) runnerDialog.current.showModal()
   }, [showRunnerDialog])
+
+  useEffect(() => {
+    if (!showRunnerDialog || !createdRunner) return
+    const interval = window.setInterval(() => setCurrentTime(Date.now()), 1_000)
+    return () => window.clearInterval(interval)
+  }, [createdRunner, showRunnerDialog])
+
+  useEffect(() => {
+    if (createdRunner && runners.some((runner) => runner.id === createdRunner.runner.id && runner.enrollment === 'enrolled')) {
+      setShowRunnerDialog(false)
+    }
+  }, [createdRunner, runners])
 
   async function signOut() {
     setSigningOut(true)
@@ -98,7 +115,9 @@ export function Dashboard({
     setCreatingRunner(true)
     setRunnerSetupError(false)
     try {
-      setCreatedRunner(await onCreateRunner(runnerCapacity))
+      const runner = await onCreateRunner(runnerCapacity)
+      setCurrentTime(Date.now())
+      setCreatedRunner({ ...runner, setupExpiresAt: Date.now() + setupTokenLifetimeMs })
     } catch {
       setRunnerSetupError(true)
     } finally {
@@ -411,6 +430,11 @@ export function Dashboard({
                   <button type="button" onClick={() => void copySetupToken()}>{setupTokenCopied ? 'Kopiert' : 'Kopieren'}</button>
                 </div>
                 <p className="fd-runner-setup-note">Starte auf dem Runner <code>bun run runner:setup</code> und füge das Token bei der Abfrage ein.</p>
+                <p className={`fd-runner-setup-status ${currentTime >= createdRunner.setupExpiresAt ? 'is-timed-out' : ''}`} role="status">
+                  {currentTime >= createdRunner.setupExpiresAt
+                    ? 'Status: Zeitüberschreitung – Setup-Token abgelaufen'
+                    : 'Status: wartet auf Verbindung'}
+                </p>
                 <button className="fd-dialog-primary" type="button" onClick={closeRunnerDialog}>Fertig</button>
               </div>
             ) : (

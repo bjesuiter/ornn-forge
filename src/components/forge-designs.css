@@ -1775,6 +1775,18 @@
 }
 .fd-setup-token button:hover { border-color: var(--accent); color: var(--accent); }
 .fd-runner-setup-note { line-height: 1.7; }
+.fd-runner-setup-status {
+  border-left: 2px solid var(--accent);
+  color: var(--text) !important;
+  font-size: 11px !important;
+  font-weight: 600;
+  line-height: 1.5;
+  padding-left: 10px;
+}
+.fd-runner-setup-status.is-timed-out {
+  border-color: #d38770;
+  color: #d38770 !important;
+}
 .fd-runner-setup-result .fd-dialog-primary { display: block; margin-top: 28px; margin-left: auto; }
 @media (max-width: 600px) {
   .fd-openai-usage { margin-bottom: 58px; }
