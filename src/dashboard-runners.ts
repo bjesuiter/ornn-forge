@@ -114,6 +114,7 @@ export async function listDashboardRunners(
         WHERE j.cleanup_status IS NOT 'verified'
         GROUP BY l.runner_id
       ) reservation ON reservation.runner_id = runner.runner_id
+      WHERE runner.decommissioned_at IS NULL
       ORDER BY runner.runner_id ASC`).all<DashboardRunnerRow>(),
     database.prepare(`SELECT l.runner_id, l.job_id, i.github_repository_full_name, i.github_issue_number,
       i.github_issue_title, l.generation, l.created_at, l.last_heartbeat_at, l.expires_at

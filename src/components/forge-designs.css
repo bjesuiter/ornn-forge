@@ -1733,6 +1733,27 @@
   background: var(--accent);
   color: var(--accent-ink);
 }
+.fd-runner-actions {
+  align-self: center;
+  display: grid;
+  gap: 8px;
+}
+.fd-runner-decommission {
+  background: transparent;
+  border: 1px solid #a45c50;
+  border-radius: 4px;
+  color: #d38770;
+  font-size: 12px !important;
+  font-weight: 600;
+  padding: 8px 12px;
+}
+.fd-runner-decommission:hover {
+  background: color-mix(in srgb, #a45c50 14%, transparent);
+}
+.fd-runner-decommission:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
 .fd-runner-empty {
   color: var(--muted);
   padding: 28px 0;
@@ -2006,7 +2027,7 @@
   .fd-runner-dialog-panel { padding: 20px; }
   .fd-setup-token { align-items: stretch; flex-direction: column; }
   .fd-setup-token button { min-height: 38px; }
-  .fd-runner-toggle {
+  .fd-runner-actions {
     justify-self: start;
   }
   .fd-topology-map {

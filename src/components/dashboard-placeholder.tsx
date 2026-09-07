@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { RemoteRunner } from '../control-plane'
+import type { RemoteRunner, RunnerDecommissionResult } from '../control-plane'
 import type { DashboardRunner } from '../dashboard-runners'
 import type { DashboardWebhook } from '../dashboard-webhooks'
 import type { OpenAiSubscriptionUsage } from '../openai-subscription-usage'
@@ -18,6 +18,7 @@ export function Dashboard({
   onSetRunnerPaused,
   onSetRunnerLabel,
   onCreateRunner,
+  onDecommissionRunner,
   onStartOpenAiSubscriptionAuthorization,
   onCompleteOpenAiSubscriptionAuthorization,
   onDisconnectOpenAiSubscription,
@@ -29,14 +30,16 @@ export function Dashboard({
   onSetRunnerPaused: (runnerId: string, paused: boolean) => Promise<void>
   onSetRunnerLabel: (runnerId: string, label: string) => Promise<void>
   onCreateRunner: (capacity: number) => Promise<{ runner: RemoteRunner; setupToken: string }>
+  onDecommissionRunner: (runnerId: string, force: boolean) => Promise<RunnerDecommissionResult>
   onStartOpenAiSubscriptionAuthorization: () => Promise<void>
   onCompleteOpenAiSubscriptionAuthorization: () => Promise<void>
   onDisconnectOpenAiSubscription: () => Promise<void>
 }) {
   const [updatingRunnerId, setUpdatingRunnerId] = useState<string>()
+  const [decommissioningRunnerId, setDecommissioningRunnerId] = useState<string>()
   const [editingRunnerId, setEditingRunnerId] = useState<string>()
   const [runnerLabel, setRunnerLabel] = useState('')
-  const [runnerError, setRunnerError] = useState(false)
+  const [runnerError, setRunnerError] = useState<string>()
   const [showRunnerDialog, setShowRunnerDialog] = useState(false)
   const [runnerCapacity, setRunnerCapacity] = useState(1)
   const [creatingRunner, setCreatingRunner] = useState(false)
@@ -67,11 +70,11 @@ export function Dashboard({
 
   async function setRunnerPaused(runner: DashboardRunner) {
     setUpdatingRunnerId(runner.id)
-    setRunnerError(false)
+    setRunnerError(undefined)
     try {
       await onSetRunnerPaused(runner.id, !runner.paused)
     } catch {
-      setRunnerError(true)
+      setRunnerError('Runner konnte nicht aktualisiert werden. Bitte versuche es erneut.')
     } finally {
       setUpdatingRunnerId(undefined)
     }
@@ -87,14 +90,33 @@ export function Dashboard({
     const label = runnerLabel.trim()
     if (!label) return
     setUpdatingRunnerId(runner.id)
-    setRunnerError(false)
+    setRunnerError(undefined)
     try {
       await onSetRunnerLabel(runner.id, label)
       setEditingRunnerId(undefined)
     } catch {
-      setRunnerError(true)
+      setRunnerError('Runner konnte nicht aktualisiert werden. Bitte versuche es erneut.')
     } finally {
       setUpdatingRunnerId(undefined)
+    }
+  }
+
+  async function decommissionRunner(runner: DashboardRunner, force: boolean) {
+    const action = force ? 'sofort stilllegen' : 'stilllegen'
+    const consequence = force
+      ? 'Die Runner-Authentifizierung und neue Leases werden sofort gesperrt. Bereits reservierte Sandboxes bleiben zur Bereinigung erhalten.'
+      : 'Der Runner wird dauerhaft deaktiviert und kann sich nicht erneut verbinden.'
+    if (!window.confirm(`${runner.label} ${action}?\n\n${consequence}`)) return
+    setDecommissioningRunnerId(runner.id)
+    setRunnerError(undefined)
+    try {
+      const result = await onDecommissionRunner(runner.id, force)
+      const message = decommissionError(result)
+      if (message) setRunnerError(message)
+    } catch {
+      setRunnerError('Runner konnte nicht stillgelegt werden. Bitte versuche es erneut.')
+    } finally {
+      setDecommissioningRunnerId(undefined)
     }
   }
 
@@ -156,7 +178,7 @@ export function Dashboard({
       <main id="fd-main" className="fd-main" tabIndex={-1}>
         {runnerError && (
           <p className="fd-error" role="alert">
-            Runner konnte nicht aktualisiert werden. Bitte versuche es erneut.
+            {runnerError}
           </p>
         )}
         <section className="fd-openai-usage" aria-labelledby="fd-openai-usage-title">
@@ -402,16 +424,30 @@ export function Dashboard({
                       </section>
                     )}
                   </div>
-                  <button
-                    className={`fd-runner-toggle ${runner.paused ? 'is-paused' : ''}`}
-                    type="button"
-                    aria-pressed={runner.paused}
-                    aria-label={`${runner.id} ${runner.paused ? 'fortsetzen' : 'pausieren'}`}
-                    onClick={() => void setRunnerPaused(runner)}
-                    disabled={updatingRunnerId === runner.id}
-                  >
-                    {updatingRunnerId === runner.id ? 'Wird geändert …' : runner.paused ? 'Fortsetzen' : 'Pausieren'}
-                  </button>
+                  <div className="fd-runner-actions">
+                    <button
+                      className={`fd-runner-toggle ${runner.paused ? 'is-paused' : ''}`}
+                      type="button"
+                      aria-pressed={runner.paused}
+                      aria-label={`${runner.id} ${runner.paused ? 'fortsetzen' : 'pausieren'}`}
+                      onClick={() => void setRunnerPaused(runner)}
+                      disabled={updatingRunnerId === runner.id || decommissioningRunnerId === runner.id}
+                    >
+                      {updatingRunnerId === runner.id ? 'Wird geändert …' : runner.paused ? 'Fortsetzen' : 'Pausieren'}
+                    </button>
+                    <button
+                      className="fd-runner-decommission"
+                      type="button"
+                      onClick={() => void decommissionRunner(runner, !runner.paused || runner.reservations > 0)}
+                      disabled={updatingRunnerId === runner.id || decommissioningRunnerId === runner.id}
+                    >
+                      {decommissioningRunnerId === runner.id
+                        ? 'Wird stillgelegt …'
+                        : !runner.paused || runner.reservations > 0
+                          ? 'Sofort stilllegen'
+                          : 'Runner löschen'}
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -494,6 +530,15 @@ function webhookStatusLabel(status: DashboardWebhook['status']) {
     case 'running': return 'Beim Runner in Arbeit'
     case 'completed': return 'Erfolgreich abgeschlossen'
     case 'message_uncertain': return 'GitHub-Antwort ungeklärt'
+  }
+}
+
+function decommissionError(result: RunnerDecommissionResult): string | undefined {
+  switch (result) {
+    case 'decommissioned': return undefined
+    case 'not_found': return 'Dieser Runner ist nicht mehr registriert.'
+    case 'requires_pause': return 'Zum Stilllegen muss der Runner zuerst pausiert werden.'
+    case 'has_reservations': return 'Der Runner hat noch Kapazitätsreservierungen und kann nicht normal stillgelegt werden.'
   }
 }
 

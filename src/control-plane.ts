@@ -116,6 +116,7 @@ export interface InvocationStore {
   pollRunner?(runnerId: string): Promise<LeaseGrant | undefined>
   setRunnerPaused?(runnerId: string, paused: boolean): Promise<boolean>
   setRunnerLabel?(runnerId: string, label: string): Promise<boolean>
+  decommissionRemoteRunner?(input: RunnerDecommission): Promise<RunnerDecommissionResult>
   heartbeatLease?(input: LeaseInput): Promise<boolean>
   releaseLease?(input: LeaseInput): Promise<boolean>
   completeLease?(input: LeaseInput & { artifact: AnalysisArtifact; cleanupStatus: 'verified' | 'failed' }): Promise<'accepted' | 'invalid_artifact'>
@@ -131,6 +132,9 @@ export type RemoteRunner = {
   enrollment: 'awaiting_setup' | 'enrolled'
   ready: boolean
 }
+
+export type RunnerDecommission = { runnerId: string; force: boolean; decommissionedAt: string }
+export type RunnerDecommissionResult = 'decommissioned' | 'not_found' | 'requires_pause' | 'has_reservations'
 
 type RemoteRunnerCreation = { id: string; desiredCapacity: number } & SetupTokenRecord
 type NewSetupToken = SetupTokenRecord & { runnerId: string }
@@ -191,6 +195,24 @@ export function createControlPlane(options: ControlPlaneOptions) {
         })
         if (!runner) return json({ apiVersion: API_VERSION, error: { code: 'runner_not_found' } }, 404)
         return json({ apiVersion: API_VERSION, runner, setupToken: issuedToken.value }, 201, { 'Cache-Control': 'no-store' })
+      }
+
+      const decommissionMatch = /^\/api\/v1\/runners\/([^/]+)\/decommission$/.exec(url.pathname)
+      if (request.method === 'POST' && decommissionMatch) {
+        if (!(await isAuthenticatedOperator(request, operatorCredential))) {
+          return json({ apiVersion: API_VERSION, error: { code: 'operator_unauthorized' } }, 401)
+        }
+        const input = await requestJson(request)
+        if (!isRunnerDecommissionRequest(input) || !options.store.decommissionRemoteRunner) {
+          return json({ apiVersion: API_VERSION, error: { code: 'invalid_runner_decommission' } }, 422)
+        }
+        const outcome = await options.store.decommissionRemoteRunner({
+          runnerId: decodeURIComponent(decommissionMatch[1]), force: input.force, decommissionedAt: currentTime(options),
+        })
+        if (outcome === 'not_found') return json({ apiVersion: API_VERSION, error: { code: 'runner_not_found' } }, 404)
+        if (outcome === 'requires_pause') return json({ apiVersion: API_VERSION, error: { code: 'runner_must_be_paused' } }, 409)
+        if (outcome === 'has_reservations') return json({ apiVersion: API_VERSION, error: { code: 'runner_has_capacity_reservations' } }, 409)
+        return json({ apiVersion: API_VERSION, runnerId: decodeURIComponent(decommissionMatch[1]), decommissioned: true, mode: input.force ? 'force' : 'normal' }, 200, { 'Cache-Control': 'no-store' })
       }
 
       if (request.method === 'POST' && url.pathname === '/api/v1/runner/setup/preflight') {
@@ -616,6 +638,10 @@ function isEnrollmentRequest(value: unknown): value is { setupToken: string; cre
     && isRunnerLabel(value.label)
 }
 
+function isRunnerDecommissionRequest(value: unknown): value is { force: boolean } {
+  return isObject(value) && typeof value.force === 'boolean'
+}
+
 export function isRunnerLabel(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.trim().length <= 255
 }
@@ -757,6 +783,7 @@ export function createInMemoryInvocationStore(): InvocationStore {
   const runnerCredentials = new Map<string, string>()
   const runnerProfiles = new Map<string, RunnerProfile>()
   const pausedRunners = new Set<string>()
+  const decommissionedRunners = new Set<string>()
   const runnerPresence = new Map<string, string>()
   const leasesByJob = new Map<string, {
     runnerId: string
@@ -805,7 +832,7 @@ export function createInMemoryInvocationStore(): InvocationStore {
     },
     async regenerateSetupToken(input) {
       const runner = remoteRunners.get(input.runnerId)
-      if (!runner || runner.enrollment !== 'awaiting_setup') return undefined
+      if (!runner || decommissionedRunners.has(runner.id) || runner.enrollment !== 'awaiting_setup') return undefined
       for (const token of setupTokensByDigest.values()) {
         if (token.runnerId === runner.id && !token.invalidatedAt && !token.consumedAt) token.invalidatedAt = input.createdAt
       }
@@ -818,11 +845,12 @@ export function createInMemoryInvocationStore(): InvocationStore {
     async preflightSetupToken(input) {
       const token = setupTokensByDigest.get(input.tokenDigest)
       if (!usableSetupToken(token, input.now)) return undefined
-      return remoteRunners.get(token.runnerId)
+      return decommissionedRunners.has(token.runnerId) ? undefined : remoteRunners.get(token.runnerId)
     },
     async enrollRemoteRunner(input) {
       const token = setupTokensByDigest.get(input.tokenDigest)
       const runner = token ? remoteRunners.get(token.runnerId) : undefined
+      if (runner && decommissionedRunners.has(runner.id)) return undefined
       if (token?.consumedAt && runner?.enrollment === 'enrolled' && runnerCredentials.get(runner.id) === input.credentialDigest) return runner
       if (!usableSetupToken(token, input.now)) return undefined
       if (!runner || runner.enrollment !== 'awaiting_setup' || runnerCredentials.has(runner.id)) return undefined
@@ -833,6 +861,7 @@ export function createInMemoryInvocationStore(): InvocationStore {
       return runner
     },
     async authenticateRunner(runnerId, credentialDigest) {
+      if (decommissionedRunners.has(runnerId)) return false
       const existing = runnerCredentials.get(runnerId)
       if (existing === undefined) {
         runnerCredentials.set(runnerId, credentialDigest)
@@ -847,7 +876,7 @@ export function createInMemoryInvocationStore(): InvocationStore {
       runnerProfiles.set(runnerId, profile)
     },
     async synchronizeRunner(input) {
-      if (!runnerCredentials.has(input.runnerId)) return undefined
+      if (decommissionedRunners.has(input.runnerId) || !runnerCredentials.has(input.runnerId)) return undefined
       runnerProfiles.set(input.runnerId, input.profile)
       const activeLeases = await Promise.all(input.activeLeases.map(async (lease) => ({
         jobId: lease.jobId,
@@ -866,7 +895,7 @@ export function createInMemoryInvocationStore(): InvocationStore {
       return runnerCredentials.has(runnerId)
     },
     async pollRunner(runnerId) {
-      if (pausedRunners.has(runnerId)) return undefined
+      if (decommissionedRunners.has(runnerId) || pausedRunners.has(runnerId)) return undefined
       const capacity = remoteRunners.get(runnerId)?.desiredCapacity ?? runnerProfiles.get(runnerId)?.capacity ?? 1
       if ([...leasesByJob.values()].filter((lease) => lease.runnerId === runnerId).length >= capacity) return undefined
       const inspection = [...inspectionsByJob.values()].find((candidate) => candidate.job.state === 'pending')
@@ -892,16 +921,25 @@ export function createInMemoryInvocationStore(): InvocationStore {
       }
     },
     async setRunnerPaused(runnerId, paused) {
-      if (!runnerCredentials.has(runnerId)) return false
+      if (decommissionedRunners.has(runnerId) || !runnerCredentials.has(runnerId)) return false
       if (paused) pausedRunners.add(runnerId)
       else pausedRunners.delete(runnerId)
       return true
     },
     async setRunnerLabel(runnerId, label) {
       const runner = remoteRunners.get(runnerId)
-      if (!runner || !isRunnerLabel(label)) return false
+      if (!runner || decommissionedRunners.has(runnerId) || !isRunnerLabel(label)) return false
       runner.label = label.trim()
       return true
+    },
+    async decommissionRemoteRunner(input) {
+      const runner = remoteRunners.get(input.runnerId)
+      if (!runner) return 'not_found'
+      if (decommissionedRunners.has(runner.id)) return 'decommissioned'
+      if (!input.force && !pausedRunners.has(runner.id)) return 'requires_pause'
+      if (!input.force && [...leasesByJob.values()].some((lease) => lease.runnerId === runner.id)) return 'has_reservations'
+      decommissionedRunners.add(runner.id)
+      return 'decommissioned'
     },
     async heartbeatLease(input) {
       const lease = await matchingLease(leasesByJob, input)
@@ -1229,7 +1267,7 @@ class D1InvocationStore implements InvocationStore {
         SELECT token.runner_id, ?, ? FROM runner_setup_tokens token
         JOIN remote_runners runner ON runner.runner_id = token.runner_id
         WHERE token.token_digest = ? AND token.expires_at > ? AND token.invalidated_at IS NULL
-          AND token.consumed_at IS NULL AND runner.enrollment_state = 'awaiting_setup'
+          AND token.consumed_at IS NULL AND runner.enrollment_state = 'awaiting_setup' AND runner.decommissioned_at IS NULL
         ON CONFLICT(runner_id) DO NOTHING`).bind(input.credentialDigest, input.now, input.tokenDigest, input.now),
       this.database.prepare(`UPDATE runner_setup_tokens SET consumed_at = ?
         WHERE token_digest = ? AND expires_at > ? AND invalidated_at IS NULL AND consumed_at IS NULL
@@ -1238,7 +1276,7 @@ class D1InvocationStore implements InvocationStore {
         .bind(input.now, input.tokenDigest, input.now, input.credentialDigest),
       this.database.prepare(`UPDATE remote_runners SET enrollment_state = 'enrolled', label = ?
         WHERE runner_id = (SELECT runner_id FROM runner_setup_tokens WHERE token_digest = ? AND consumed_at = ?)
-          AND EXISTS (SELECT 1 FROM runner_credentials credential
+          AND decommissioned_at IS NULL AND EXISTS (SELECT 1 FROM runner_credentials credential
             WHERE credential.runner_id = remote_runners.runner_id AND credential.credential_digest = ?)`)
         .bind(input.label.trim(), input.tokenDigest, input.now, input.credentialDigest),
     ])
@@ -1247,7 +1285,7 @@ class D1InvocationStore implements InvocationStore {
       JOIN runner_setup_tokens token ON token.runner_id = runner.runner_id
       JOIN runner_credentials credential ON credential.runner_id = runner.runner_id
       WHERE token.token_digest = ? AND token.consumed_at IS NOT NULL
-        AND runner.enrollment_state = 'enrolled' AND credential.credential_digest = ?`)
+        AND runner.enrollment_state = 'enrolled' AND runner.decommissioned_at IS NULL AND credential.credential_digest = ?`)
       .bind(input.tokenDigest, input.credentialDigest).first<RemoteRunnerRow>()
     return row ? remoteRunnerFromRow(row) : undefined
   }
@@ -1256,19 +1294,22 @@ class D1InvocationStore implements InvocationStore {
     const row = await this.database.prepare(`SELECT runner.runner_id, runner.label, runner.desired_capacity,
       runner.enrollment_state, runner.readiness_state FROM runner_setup_tokens token
       JOIN remote_runners runner ON runner.runner_id = token.runner_id
-      WHERE token.token_digest = ? AND token.expires_at > ? AND token.invalidated_at IS NULL AND token.consumed_at IS NULL`)
+      WHERE token.token_digest = ? AND token.expires_at > ? AND token.invalidated_at IS NULL AND token.consumed_at IS NULL
+        AND runner.decommissioned_at IS NULL`)
       .bind(input.tokenDigest, input.now).first<RemoteRunnerRow>()
     return row ? remoteRunnerFromRow(row) : undefined
   }
 
   private async remoteRunner(runnerId: string): Promise<RemoteRunner | undefined> {
     const row = await this.database.prepare(`SELECT runner_id, label, desired_capacity, enrollment_state, readiness_state
-      FROM remote_runners WHERE runner_id = ?`).bind(runnerId).first<RemoteRunnerRow>()
+      FROM remote_runners WHERE runner_id = ? AND decommissioned_at IS NULL`).bind(runnerId).first<RemoteRunnerRow>()
     return row ? remoteRunnerFromRow(row) : undefined
   }
 
   async authenticateRunner(runnerId: string, credentialDigest: string): Promise<boolean> {
-    const stored = await this.database.prepare('SELECT credential_digest FROM runner_credentials WHERE runner_id = ?')
+    const stored = await this.database.prepare(`SELECT credential.credential_digest FROM runner_credentials credential
+      JOIN remote_runners runner ON runner.runner_id = credential.runner_id
+      WHERE credential.runner_id = ? AND runner.decommissioned_at IS NULL`)
       .bind(runnerId).first<{ credential_digest: string }>()
     return stored?.credential_digest === credentialDigest
   }
@@ -1349,14 +1390,12 @@ class D1InvocationStore implements InvocationStore {
   }
 
   async pollRunner(runnerId: string): Promise<LeaseGrant | undefined> {
-    const capacity = await this.database.prepare(`SELECT COALESCE(
-      (SELECT desired_capacity FROM remote_runners WHERE runner_id = ?),
-      (SELECT capacity FROM runner_profiles WHERE runner_id = ?), 1
-    ) AS capacity`).bind(runnerId, runnerId).first<{ capacity: number }>()
+    const runner = await this.remoteRunner(runnerId)
+    if (!runner || runner.enrollment !== 'enrolled') return undefined
     const reservations = await this.database.prepare(`SELECT COUNT(*) AS count FROM runner_leases l
       JOIN jobs j ON j.job_id = l.job_id WHERE l.runner_id = ? AND j.cleanup_status IS NOT 'verified'`).bind(runnerId)
       .first<{ count: number }>()
-    if ((reservations?.count ?? 0) >= (capacity?.capacity ?? 1)) return undefined
+    if ((reservations?.count ?? 0) >= runner.desiredCapacity) return undefined
     const candidate = await this.database.prepare(`SELECT j.job_id, i.github_repository_full_name, i.github_issue_number, i.github_issue_title,
       i.github_issue_body, i.github_comment_body FROM jobs j JOIN invocations i ON i.invocation_id = j.invocation_id
       WHERE j.state = 'pending' ORDER BY j.created_at ASC LIMIT 1`).first<{
@@ -1375,10 +1414,10 @@ class D1InvocationStore implements InvocationStore {
       this.database.prepare(`INSERT INTO runner_leases (job_id, runner_id, generation, token_digest, expires_at, last_heartbeat_at, created_at)
         SELECT ?, ?, 1, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'pending')
         AND NOT EXISTS (SELECT 1 FROM runner_pauses WHERE runner_id = ? AND paused = 1)
+        AND EXISTS (SELECT 1 FROM remote_runners WHERE runner_id = ? AND enrollment_state = 'enrolled' AND decommissioned_at IS NULL)
         AND (SELECT COUNT(*) FROM runner_leases l JOIN jobs j ON j.job_id = l.job_id
           WHERE l.runner_id = ? AND j.cleanup_status IS NOT 'verified') <
-          COALESCE((SELECT desired_capacity FROM remote_runners WHERE runner_id = ?),
-            (SELECT capacity FROM runner_profiles WHERE runner_id = ?), 1)`).bind(
+          (SELECT desired_capacity FROM remote_runners WHERE runner_id = ? AND decommissioned_at IS NULL)`).bind(
         candidate.job_id, runnerId, tokenDigest, expiresAt, now, now, candidate.job_id, runnerId, runnerId, runnerId, runnerId,
       ),
       this.database.prepare(`UPDATE jobs SET state = 'leased' WHERE job_id = ? AND state = 'pending'
@@ -1409,7 +1448,9 @@ class D1InvocationStore implements InvocationStore {
 
   async setRunnerPaused(runnerId: string, paused: boolean): Promise<boolean> {
     const result = await this.database.prepare(`INSERT INTO runner_pauses (runner_id, paused, updated_at)
-      SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM runner_credentials WHERE runner_id = ?)
+      SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM runner_credentials credential
+        JOIN remote_runners runner ON runner.runner_id = credential.runner_id
+        WHERE credential.runner_id = ? AND runner.decommissioned_at IS NULL)
       ON CONFLICT(runner_id) DO UPDATE SET paused = excluded.paused, updated_at = excluded.updated_at`).bind(
       runnerId, paused ? 1 : 0, new Date().toISOString(), runnerId,
     ).run()
@@ -1418,9 +1459,35 @@ class D1InvocationStore implements InvocationStore {
 
   async setRunnerLabel(runnerId: string, label: string): Promise<boolean> {
     if (!isRunnerLabel(label)) return false
-    const result = await this.database.prepare('UPDATE remote_runners SET label = ? WHERE runner_id = ?')
+    const result = await this.database.prepare('UPDATE remote_runners SET label = ? WHERE runner_id = ? AND decommissioned_at IS NULL')
       .bind(label.trim(), runnerId).run()
     return result.meta.changes === 1
+  }
+
+  async decommissionRemoteRunner(input: RunnerDecommission): Promise<RunnerDecommissionResult> {
+    const runner = await this.database.prepare(`SELECT runner.decommissioned_at, COALESCE(pause.paused, 0) AS paused,
+      EXISTS (SELECT 1 FROM runner_leases lease JOIN jobs job ON job.job_id = lease.job_id
+        WHERE lease.runner_id = runner.runner_id AND job.cleanup_status IS NOT 'verified') AS has_reservations
+      FROM remote_runners runner
+      LEFT JOIN runner_pauses pause ON pause.runner_id = runner.runner_id
+      WHERE runner.runner_id = ?`).bind(input.runnerId).first<{
+        decommissioned_at: string | null
+        paused: number
+        has_reservations: number
+      }>()
+    if (!runner) return 'not_found'
+    if (runner.decommissioned_at !== null) return 'decommissioned'
+    if (!input.force && runner.paused !== 1) return 'requires_pause'
+    if (!input.force && runner.has_reservations === 1) return 'has_reservations'
+    const result = await this.database.prepare(`UPDATE remote_runners SET decommissioned_at = ?, decommission_mode = ?
+      WHERE runner_id = ? AND decommissioned_at IS NULL
+        AND (? = 1 OR (
+          EXISTS (SELECT 1 FROM runner_pauses WHERE runner_id = remote_runners.runner_id AND paused = 1)
+          AND NOT EXISTS (SELECT 1 FROM runner_leases lease JOIN jobs job ON job.job_id = lease.job_id
+            WHERE lease.runner_id = remote_runners.runner_id AND job.cleanup_status IS NOT 'verified')
+        ))`).bind(input.decommissionedAt, input.force ? 'force' : 'normal', input.runnerId, input.force ? 1 : 0).run()
+    if (result.meta.changes === 1) return 'decommissioned'
+    return input.force ? 'not_found' : 'has_reservations'
   }
 
   async recordRunnerSuccess(runnerId: string): Promise<void> {

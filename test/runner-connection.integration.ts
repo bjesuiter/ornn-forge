@@ -2,9 +2,11 @@ import { expect, test } from 'vitest'
 import { env, exports } from 'cloudflare:workers'
 import { evictDurableObject } from 'cloudflare:test'
 import { envelope } from '@ornn-forge/protocol'
+import { createD1InvocationStore } from '../src/control-plane'
 
 const runnerId = 'runner_v1_abcdefghijklmnopqrstuv'
 const recoveringRunnerId = 'runner_v1_zyxwvutsrqponmlkjihgfe'
+const decommissionedRunnerId = 'runner_v1_decommissioned00000000'
 const profile = {
   release: 'test', platform: 'linux', architecture: 'arm64', runtime: 'workerd', executor: 'fixture', hardwareModel: 'Test host', capacity: 1,
   logicalCpuCount: 1, memoryLimitBytes: 134_217_728,
@@ -60,6 +62,34 @@ test('a fresh Runner connection recovers D1-authoritative configuration and comm
   socket.close(1000, 'test complete')
 })
 
+test('a force-decommissioned Runner cannot synchronize again or receive a new lease', async () => {
+  await env.ORNN_D1.prepare(`INSERT INTO remote_runners (
+    runner_id, kind, desired_capacity, enrollment_state, readiness_state, created_at
+  ) VALUES (?, 'remote', 1, 'enrolled', 'not_ready', ?)`).bind(decommissionedRunnerId, new Date().toISOString()).run()
+  await env.ORNN_D1.prepare('INSERT INTO runner_credentials (runner_id, credential_digest, created_at) VALUES (?, ?, ?)')
+    .bind(decommissionedRunnerId, 'test-digest', new Date().toISOString()).run()
+
+  const store = createD1InvocationStore(env.ORNN_D1)
+  const socket = await connect(exports.default, decommissionedRunnerId)
+  const synchronized = nextMessage(socket)
+  socket.send(JSON.stringify(envelope('runner.synchronize', {
+    runnerId: decommissionedRunnerId, instanceId: 'instance_v1_decommissioned00000000', profile, activeLeases: [], commandJournal: [],
+  })))
+  expect((await synchronized).type).toBe('runner.synchronized')
+
+  expect(await store.decommissionRemoteRunner({
+    runnerId: decommissionedRunnerId, force: true, decommissionedAt: new Date().toISOString(),
+  })).toBe('decommissioned')
+  expect(await store.pollRunner(decommissionedRunnerId)).toBeUndefined()
+
+  const reconnect = await connect(exports.default, decommissionedRunnerId)
+  const closed = new Promise<CloseEvent>((resolve) => reconnect.addEventListener('close', (event) => resolve(event)))
+  reconnect.send(JSON.stringify(envelope('runner.synchronize', {
+    runnerId: decommissionedRunnerId, instanceId: 'instance_v1_decommissioned00000000', profile, activeLeases: [], commandJournal: [],
+  })))
+  expect((await closed).code).toBe(1008)
+})
+
 async function connect(worker: { fetch(request: Request): Promise<Response> }, id: string): Promise<WebSocket> {
   const response = await worker.fetch(new Request('https://runner.test/connect', {
     headers: { upgrade: 'websocket', 'x-ornn-runner-id': id },
@@ -76,7 +106,7 @@ async function nextMessage(socket: WebSocket): Promise<{ type: string }> {
 
 async function createControlStateSchema(): Promise<void> {
   await env.ORNN_D1.batch([
-    env.ORNN_D1.prepare("CREATE TABLE remote_runners (runner_id TEXT PRIMARY KEY, kind TEXT, desired_capacity INTEGER, enrollment_state TEXT, readiness_state TEXT, created_at TEXT, label TEXT NOT NULL DEFAULT 'Unbenannt')"),
+    env.ORNN_D1.prepare("CREATE TABLE remote_runners (runner_id TEXT PRIMARY KEY, kind TEXT, desired_capacity INTEGER, enrollment_state TEXT, readiness_state TEXT, created_at TEXT, label TEXT NOT NULL DEFAULT 'Unbenannt', decommissioned_at TEXT, decommission_mode TEXT)"),
     env.ORNN_D1.prepare('CREATE TABLE runner_credentials (runner_id TEXT PRIMARY KEY, credential_digest TEXT, created_at TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE runner_profiles (runner_id TEXT PRIMARY KEY, release TEXT, platform TEXT, architecture TEXT, runtime TEXT, executor TEXT, hardware_model TEXT, capacity INTEGER, logical_cpu_count INTEGER, memory_limit_bytes INTEGER, updated_at TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE runner_presence (runner_id TEXT PRIMARY KEY, last_seen_at TEXT)'),

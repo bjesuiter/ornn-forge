@@ -13,6 +13,7 @@ const migrations = [
   '0011_add_runner_hardware_model.sql',
   '0012_add_runner_labels.sql',
   '0013_add_dashboard_read_models.sql',
+  '0014_add_runner_decommissioning.sql',
 ].map((name) => readFileSync(new URL(`../migrations/${name}`, import.meta.url), 'utf8'))
 
 test('the dashboard keeps runner presence, pause, faults, capacity, and work as independent dimensions', () => {
@@ -95,9 +96,11 @@ test('the dashboard query keeps enrollment, readiness, and presence separate', a
   for (const migration of migrations) database.exec(migration)
   database.run(`INSERT INTO remote_runners (runner_id, kind, desired_capacity, enrollment_state, readiness_state, created_at) VALUES
     ('runner_awaiting', 'remote', 2, 'awaiting_setup', 'not_ready', '2026-09-06T12:00:00.000Z'),
-    ('runner_enrolled', 'remote', 3, 'enrolled', 'ready', '2026-09-06T12:00:00.000Z')`)
+    ('runner_enrolled', 'remote', 3, 'enrolled', 'ready', '2026-09-06T12:00:00.000Z'),
+    ('runner_decommissioned', 'remote', 1, 'enrolled', 'ready', '2026-09-06T12:00:00.000Z')`)
   database.run("INSERT INTO runner_credentials VALUES ('runner_enrolled', 'digest-only', '2026-09-06T12:00:00.000Z')")
   database.run("INSERT INTO runner_presence VALUES ('runner_enrolled', '2026-09-06T12:00:00.000Z')")
+  database.run("UPDATE remote_runners SET decommissioned_at = '2026-09-06T12:01:00.000Z', decommission_mode = 'normal' WHERE runner_id = 'runner_decommissioned'")
 
   const runners = await listDashboardRunners(sqliteDashboardDatabase(database), new Date('2026-09-06T12:00:05.000Z'))
 

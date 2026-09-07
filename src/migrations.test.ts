@@ -13,6 +13,7 @@ const openAiSubscriptionMigration = readFileSync(new URL('../migrations/0010_add
 const runnerHardwareModelMigration = readFileSync(new URL('../migrations/0011_add_runner_hardware_model.sql', import.meta.url), 'utf8')
 const runnerLabelsMigration = readFileSync(new URL('../migrations/0012_add_runner_labels.sql', import.meta.url), 'utf8')
 const dashboardReadModelsMigration = readFileSync(new URL('../migrations/0013_add_dashboard_read_models.sql', import.meta.url), 'utf8')
+const runnerDecommissioningMigration = readFileSync(new URL('../migrations/0014_add_runner_decommissioning.sql', import.meta.url), 'utf8')
 
 test('the admission migration creates immutable provenance and append-only events', () => {
   const database = new Database(':memory:')
@@ -92,6 +93,7 @@ test('the fixture Runner migration stores only credential and lease digests', ()
   database.exec(runnerHardwareModelMigration)
   database.exec(runnerLabelsMigration)
   database.exec(dashboardReadModelsMigration)
+  database.exec(runnerDecommissioningMigration)
   expect(database.query("SELECT hardware_model FROM runner_profiles WHERE runner_id = 'runner_homeserv1'").get())
     .toEqual({ hardware_model: 'Nicht erkannt' })
   expect(database.query("SELECT label FROM remote_runners WHERE runner_id = 'runner_homeserv1'").get())
@@ -103,6 +105,8 @@ test('the fixture Runner migration stores only credential and lease digests', ()
     .toEqual({ name: 'deliveries_dashboard_recent' })
   expect(database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'runner_recent_results'").get())
     .toEqual({ name: 'runner_recent_results' })
+  expect(database.query("SELECT decommissioned_at, decommission_mode FROM remote_runners WHERE runner_id = 'runner_homeserv1'").get())
+    .toEqual({ decommissioned_at: null, decommission_mode: null })
 })
 
 test('the dashboard read model backfills only the five latest successful results per Runner', () => {

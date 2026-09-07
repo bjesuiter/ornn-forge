@@ -5,6 +5,7 @@ import { Dashboard } from '../components/dashboard-placeholder'
 import {
   completeDashboardOpenAiSubscriptionAuthorization,
   createDashboardRunner,
+  decommissionDashboardRunner,
   disconnectDashboardOpenAiSubscription,
   getDashboardSnapshot,
   setDashboardRunnerLabel,
@@ -12,6 +13,7 @@ import {
   startDashboardOpenAiSubscriptionAuthorization,
 } from '../dashboard.functions'
 import { dashboardSnapshotQueryOptions } from '../dashboard-queries'
+import type { RunnerDecommissionResult } from '../control-plane'
 
 export const Route = createFileRoute('/dashboard/')({
   loader: () => getDashboardSnapshot(),
@@ -52,6 +54,12 @@ function DashboardRoute() {
     return created
   }
 
+  async function decommissionRunner(runnerId: string, force: boolean): Promise<RunnerDecommissionResult> {
+    const result = await decommissionDashboardRunner({ data: { runnerId, force } })
+    if (result === 'decommissioned') await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    return result
+  }
+
   async function startOpenAiSubscriptionAuthorization() {
     await startDashboardOpenAiSubscriptionAuthorization()
     await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
@@ -75,6 +83,7 @@ function DashboardRoute() {
     onSetRunnerPaused={setRunnerPaused}
     onSetRunnerLabel={setRunnerLabel}
     onCreateRunner={createRunner}
+    onDecommissionRunner={decommissionRunner}
     onStartOpenAiSubscriptionAuthorization={startOpenAiSubscriptionAuthorization}
     onCompleteOpenAiSubscriptionAuthorization={completeOpenAiSubscriptionAuthorization}
     onDisconnectOpenAiSubscription={disconnectOpenAiSubscription}

@@ -174,6 +174,60 @@ test('issues independent, short-lived, one-time Setup tokens for Remote Runner e
   expect((await setupRequest('/api/v1/runner/setup/preflight', { setupToken: replacement.setupToken })).status).toBe(401)
 })
 
+test('decommissions an idle paused Remote Runner and requires force while it holds a capacity reservation', async () => {
+  const store = createInMemoryInvocationStore()
+  const app = createControlPlane({
+    store, githubWebhookSecret: webhookSecret, githubInstallationId: '42', githubRepositoryId: '99', operatorBearerSecret: operatorSecret,
+    runnerConnection: { async connect() { return new Response('connected') } },
+  })
+  const operatorRequest = (path: string, body: unknown) => app.fetch(new Request(`https://ornn.example${path}`, {
+    method: 'POST', headers: { authorization: `Bearer ${operatorSecret}`, 'content-type': 'application/json' }, body: JSON.stringify(body),
+  }))
+  const setupRequest = (path: string, body: unknown) => app.fetch(new Request(`https://ornn.example${path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  }))
+
+  const created = await operatorRequest('/api/v1/runners', { capacity: 1 })
+  const { runner, setupToken } = await created.json() as { runner: { id: string }; setupToken: string }
+  const credential = 'A'.repeat(43)
+  await setupRequest('/api/v1/runner/setup/enroll', {
+    setupToken, credentialDigest: await sha256Hex(credential), label: 'forge-01',
+  })
+
+  const rejected = await operatorRequest(`/api/v1/runners/${runner.id}/decommission`, { force: false })
+  expect(rejected.status).toBe(409)
+  expect(await rejected.json()).toMatchObject({ error: { code: 'runner_must_be_paused' } })
+
+  expect(await store.setRunnerPaused?.(runner.id, true)).toBe(true)
+  const decommissioned = await operatorRequest(`/api/v1/runners/${runner.id}/decommission`, { force: false })
+  expect(decommissioned.status).toBe(200)
+  expect(await decommissioned.json()).toMatchObject({ runnerId: runner.id, decommissioned: true, mode: 'normal' })
+  expect(await store.authenticateRunner?.(runner.id, await sha256Hex(credential))).toBe(false)
+  expect((await app.fetch(new Request('https://ornn.example/api/v1/runner/connect', {
+    headers: { upgrade: 'websocket', authorization: `Bearer ${credential}`, 'x-ornn-runner-id': runner.id },
+  }))).status).toBe(401)
+
+  const forcedRunnerId = 'runner_v1_abcdefghijklmnopqrstuv'
+  await store.createRemoteRunner?.({
+    id: forcedRunnerId, desiredCapacity: 1, tokenId: 'st_v1_abcdefghijklmnopqrstuv', tokenDigest: 'force-setup',
+    createdAt: '2026-09-07T00:00:00.000Z', expiresAt: '2026-09-07T00:15:00.000Z',
+  })
+  const forcedCredential = 'B'.repeat(43)
+  await store.enrollRemoteRunner?.({
+    tokenDigest: 'force-setup', credentialDigest: await sha256Hex(forcedCredential), label: 'forge-02', now: '2026-09-07T00:01:00.000Z',
+  })
+  const admitted = await app.fetch(await signedWebhookRequest('delivery-decommission-force', issueComment()))
+  expect(admitted.status).toBe(201)
+  const lease = await store.pollRunner?.(forcedRunnerId)
+  expect(lease).toBeDefined()
+
+  const forced = await operatorRequest(`/api/v1/runners/${forcedRunnerId}/decommission`, { force: true })
+  expect(forced.status).toBe(200)
+  expect(await store.pollRunner?.(forcedRunnerId)).toBeUndefined()
+  expect(await store.heartbeatLease?.({ runnerId: forcedRunnerId, jobId: lease!.jobId, leaseToken: lease!.leaseToken })).toBe(true)
+  expect(await store.authenticateRunner?.(forcedRunnerId, await sha256Hex(forcedCredential))).toBe(false)
+})
+
 test('reconciles a reconnecting Runner against durable desired configuration', async () => {
   const store = createInMemoryInvocationStore()
   await store.authenticateRunner?.('runner_homeserv1', 'digest')

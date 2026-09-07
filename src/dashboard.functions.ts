@@ -2,7 +2,7 @@ import { createServerFn } from '@tanstack/react-start'
 import { getRequestHeaders, setResponseHeader } from '@tanstack/react-start/server'
 import { env } from 'cloudflare:workers'
 import { auth } from './auth.server'
-import { createD1InvocationStore, createRemoteRunnerSetup, isRunnerLabel, type RemoteRunner } from './control-plane'
+import { createD1InvocationStore, createRemoteRunnerSetup, isRunnerLabel, type RemoteRunner, type RunnerDecommissionResult } from './control-plane'
 import { listDashboardRunners, type DashboardRunner } from './dashboard-runners'
 import { listDashboardWebhooks, type DashboardWebhook } from './dashboard-webhooks'
 import {
@@ -101,6 +101,19 @@ export const createDashboardRunner = createServerFn({ method: 'POST' })
     return createRemoteRunnerSetup({ store: createD1InvocationStore(env.ORNN_D1) }, data.capacity)
   })
 
+export const decommissionDashboardRunner = createServerFn({ method: 'POST' })
+  .validator((data: unknown) => {
+    if (!isDecommissionRequest(data)) throw new Error('Invalid Runner decommission request')
+    return data
+  })
+  .handler(async ({ data }): Promise<RunnerDecommissionResult> => {
+    const session = await auth.api.getSession({ headers: getRequestHeaders() })
+    if (!session) throw new Error('Dashboard session required')
+    return createD1InvocationStore(env.ORNN_D1).decommissionRemoteRunner({
+      runnerId: data.runnerId, force: data.force, decommissionedAt: new Date().toISOString(),
+    })
+  })
+
 async function requireDashboardSession() {
   const session = await auth.api.getSession({ headers: getRequestHeaders() })
   if (!session) throw new Error('Dashboard session required')
@@ -122,4 +135,10 @@ function isRunnerCreationRequest(value: unknown): value is { capacity: number } 
   return typeof value === 'object' && value !== null
     && 'capacity' in value && typeof value.capacity === 'number' && Number.isInteger(value.capacity)
     && value.capacity >= 1 && value.capacity <= 32
+}
+
+function isDecommissionRequest(value: unknown): value is { runnerId: string; force: boolean } {
+  return typeof value === 'object' && value !== null
+    && 'runnerId' in value && typeof value.runnerId === 'string' && value.runnerId.length > 0 && value.runnerId.length <= 200
+    && 'force' in value && typeof value.force === 'boolean'
 }
