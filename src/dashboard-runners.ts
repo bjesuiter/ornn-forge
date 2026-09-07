@@ -121,17 +121,10 @@ export async function listDashboardRunners(
       JOIN jobs j ON j.job_id = l.job_id AND j.state = 'leased'
       JOIN invocations i ON i.invocation_id = j.invocation_id
       ORDER BY l.created_at ASC`).all<DashboardRunnerJobRow>(),
-    database.prepare(`WITH ranked_jobs AS (
-      SELECT l.runner_id, l.job_id, i.github_repository_full_name, i.github_issue_number,
-        i.github_issue_title, l.created_at, j.execution_completed_at,
-        ROW_NUMBER() OVER (PARTITION BY l.runner_id ORDER BY j.execution_completed_at DESC) AS position
-      FROM runner_leases l
-      JOIN jobs j ON j.job_id = l.job_id AND j.state = 'succeeded'
-      JOIN invocations i ON i.invocation_id = j.invocation_id
-      WHERE j.execution_completed_at IS NOT NULL
-    ) SELECT runner_id, job_id, github_repository_full_name, github_issue_number, github_issue_title,
-      created_at, execution_completed_at FROM ranked_jobs WHERE position <= 5
-      ORDER BY runner_id ASC, execution_completed_at DESC`).all<DashboardRunnerResultRow>(),
+    database.prepare(`SELECT runner_id, job_id, github_repository_full_name, github_issue_number,
+      github_issue_title, started_at AS created_at, completed_at AS execution_completed_at
+      FROM runner_recent_results
+      ORDER BY runner_id ASC, completed_at DESC, job_id DESC`).all<DashboardRunnerResultRow>(),
   ])
 
   return dashboardRunnersFromRows(runners.results, onlineSince, activeJobs.results, completedJobs.results)

@@ -12,6 +12,7 @@ const runnerControlMigration = readFileSync(new URL('../migrations/0009_persist_
 const openAiSubscriptionMigration = readFileSync(new URL('../migrations/0010_add_openai_subscription_usage.sql', import.meta.url), 'utf8')
 const runnerHardwareModelMigration = readFileSync(new URL('../migrations/0011_add_runner_hardware_model.sql', import.meta.url), 'utf8')
 const runnerLabelsMigration = readFileSync(new URL('../migrations/0012_add_runner_labels.sql', import.meta.url), 'utf8')
+const dashboardReadModelsMigration = readFileSync(new URL('../migrations/0013_add_dashboard_read_models.sql', import.meta.url), 'utf8')
 
 test('the admission migration creates immutable provenance and append-only events', () => {
   const database = new Database(':memory:')
@@ -90,6 +91,7 @@ test('the fixture Runner migration stores only credential and lease digests', ()
   database.exec(runnerControlMigration)
   database.exec(runnerHardwareModelMigration)
   database.exec(runnerLabelsMigration)
+  database.exec(dashboardReadModelsMigration)
   expect(database.query("SELECT hardware_model FROM runner_profiles WHERE runner_id = 'runner_homeserv1'").get())
     .toEqual({ hardware_model: 'Nicht erkannt' })
   expect(database.query("SELECT label FROM remote_runners WHERE runner_id = 'runner_homeserv1'").get())
@@ -97,4 +99,47 @@ test('the fixture Runner migration stores only credential and lease digests', ()
   database.run(`INSERT INTO runner_commands VALUES ('command_v1_a', 'runner_homeserv1', 'profile.refresh', '{}', '2026-09-06T00:00:00.000Z')`)
   database.run(`INSERT INTO runner_command_journal VALUES ('runner_homeserv1', 'command_v1_a', 'completed', '2026-09-06T00:01:00.000Z')`)
   expect(database.query('SELECT state FROM runner_command_journal').get()).toEqual({ state: 'completed' })
+  expect(database.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'deliveries_dashboard_recent'").get())
+    .toEqual({ name: 'deliveries_dashboard_recent' })
+  expect(database.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'runner_recent_results'").get())
+    .toEqual({ name: 'runner_recent_results' })
+})
+
+test('the dashboard read model backfills only the five latest successful results per Runner', () => {
+  const database = new Database(':memory:')
+  database.exec(migration)
+  database.exec(runnerMigration)
+  database.exec(runnerDiagnosticsMigration)
+  database.exec(remoteRunnersMigration)
+  database.exec(runnerHardwareModelMigration)
+  database.exec(runnerLabelsMigration)
+  database.run(`INSERT INTO remote_runners VALUES (
+    'runner_homeserv1', 'remote', 1, 'enrolled', 'ready', '2026-09-07T11:00:00.000Z', 'forge-01'
+  )`)
+  database.run("INSERT INTO runner_credentials VALUES ('runner_homeserv1', 'digest', '2026-09-07T11:00:00.000Z')")
+
+  for (let index = 1; index <= 6; index += 1) {
+    const id = String(index).padStart(2, '0')
+    database.run(`INSERT INTO invocations VALUES (
+      'inv_${id}', 1, 'delivery_${id}', '42', '99', 'bjesuiter/ornn-forge', ${index},
+      'Issue ${id}', '', 'comment_${id}', '', 'bjesuiter', '{}', 'policy', '2026-09-07T11:00:${id}.000Z'
+    )`)
+    database.run(`INSERT INTO jobs (
+      job_id, schema_version, invocation_id, state, flow_id, flow_version_id, policy_version_id, created_at,
+      execution_status, execution_completed_at, cleanup_status, cleanup_updated_at
+    ) VALUES (
+      'job_${id}', 1, 'inv_${id}', 'succeeded', 'analyze', 'flow', 'policy', '2026-09-07T11:00:${id}.000Z',
+      'succeeded', '2026-09-07T11:10:${id}.000Z', 'verified', '2026-09-07T11:10:${id}.000Z'
+    )`)
+    database.run(`INSERT INTO runner_leases VALUES (
+      'job_${id}', 'runner_homeserv1', 1, 'digest_${id}', '2026-09-07T11:20:00.000Z',
+      '2026-09-07T11:10:${id}.000Z', '2026-09-07T11:00:${id}.000Z'
+    )`)
+  }
+
+  database.exec(dashboardReadModelsMigration)
+
+  expect(database.query(`SELECT job_id FROM runner_recent_results
+    WHERE runner_id = 'runner_homeserv1' ORDER BY completed_at DESC, job_id DESC`).all())
+    .toEqual([{ job_id: 'job_06' }, { job_id: 'job_05' }, { job_id: 'job_04' }, { job_id: 'job_03' }, { job_id: 'job_02' }])
 })

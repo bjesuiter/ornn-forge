@@ -12,6 +12,7 @@ const migrations = [
   '0008_create_remote_runner_identities.sql',
   '0011_add_runner_hardware_model.sql',
   '0012_add_runner_labels.sql',
+  '0013_add_dashboard_read_models.sql',
 ].map((name) => readFileSync(new URL(`../migrations/${name}`, import.meta.url), 'utf8'))
 
 test('the dashboard keeps runner presence, pause, faults, capacity, and work as independent dimensions', () => {

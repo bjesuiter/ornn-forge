@@ -21,17 +21,25 @@ type DashboardWebhookRow = {
   latest_attempt: 'pending' | 'succeeded' | 'uncertain' | 'failed' | null
 }
 
-export async function listDashboardWebhooks(database: D1Database): Promise<DashboardWebhook[]> {
-  const result = await database.prepare(`SELECT d.github_delivery_id, i.github_repository_full_name,
+export type DashboardWebhookDatabase = {
+  prepare(query: string): { all<T>(): Promise<{ results: T[] }> }
+}
+
+export async function listDashboardWebhooks(database: DashboardWebhookDatabase): Promise<DashboardWebhook[]> {
+  const result = await database.prepare(`WITH recent_deliveries AS (
+    SELECT github_delivery_id, invocation_id, job_id, accepted_at
+    FROM deliveries
+    ORDER BY accepted_at DESC, github_delivery_id DESC
+    LIMIT 50
+  ) SELECT d.github_delivery_id, i.github_repository_full_name,
     i.github_issue_number, i.github_issue_title, i.github_comment_id, d.accepted_at, j.state, l.runner_id,
     m.latest_attempt
-    FROM deliveries d
+    FROM recent_deliveries d
     JOIN invocations i ON i.invocation_id = d.invocation_id
     JOIN jobs j ON j.job_id = d.job_id
     LEFT JOIN runner_leases l ON l.job_id = j.job_id
     LEFT JOIN ornn_messages m ON m.job_id = j.job_id
-    ORDER BY d.accepted_at DESC, d.github_delivery_id DESC
-    LIMIT 50`).all<DashboardWebhookRow>()
+    ORDER BY d.accepted_at DESC, d.github_delivery_id DESC`).all<DashboardWebhookRow>()
 
   return dashboardWebhooksFromRows(result.results)
 }

@@ -1491,6 +1491,24 @@ class D1InvocationStore implements InvocationStore {
       this.database.prepare(`INSERT INTO analysis_artifacts (job_id, schema_version, artifact_json, created_at)
         SELECT ?, 1, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'succeeded')
         ON CONFLICT(job_id) DO NOTHING`).bind(input.jobId, artifactJson, now, input.jobId),
+      this.database.prepare(`INSERT INTO runner_recent_results (
+        job_id, runner_id, github_repository_full_name, github_issue_number,
+        github_issue_title, started_at, completed_at
+      ) SELECT lease.job_id, lease.runner_id, invocation.github_repository_full_name,
+        invocation.github_issue_number, invocation.github_issue_title,
+        lease.created_at, job.execution_completed_at
+      FROM runner_leases lease
+      JOIN jobs job ON job.job_id = lease.job_id
+      JOIN invocations invocation ON invocation.invocation_id = job.invocation_id
+      WHERE lease.job_id = ? AND lease.runner_id = ? AND job.state = 'succeeded'
+      ON CONFLICT(job_id) DO NOTHING`).bind(input.jobId, input.runnerId),
+      this.database.prepare(`DELETE FROM runner_recent_results
+        WHERE runner_id = ? AND job_id IN (
+          SELECT job_id FROM runner_recent_results
+          WHERE runner_id = ?
+          ORDER BY completed_at DESC, job_id DESC
+          LIMIT -1 OFFSET 5
+        )`).bind(input.runnerId, input.runnerId),
       this.database.prepare(`INSERT INTO domain_events (event_id, schema_version, stream_kind, stream_id, revision, event_type, payload_json, payload_sha256, created_at)
         SELECT ?, ?, 'job', ?, ?, 'job.succeeded', ?, ?, ? WHERE EXISTS
         (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'succeeded')
