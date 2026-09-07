@@ -164,10 +164,10 @@ bun run runner:debug -- down --volumes
 ```
 
 The launcher uses only the active Docker context's Unix socket and refuses TCP,
-SSH, or unavailable endpoints. Compose turns the Varlock-provided value into an
-in-memory Docker secret mounted only at `/run/secrets/runner_credential`; it is
-not a container environment variable. The checkout is mounted into the Runner
-for watch mode, but Job sandboxes never receive the host checkout, Docker
-socket, Runner state, or credential. Use `--root` only as the explicit OrbStack
-fallback when its forwarded socket cannot be read by the container's normal
-`bun` user.
+SSH, or unavailable endpoints. Compose mounts the Varlock-provided credential at
+`/run/secrets/runner_credential`, never as a container environment variable. Its
+permission-restricted local source is removed by `runner:debug -- down`. The
+checkout is mounted into the Runner
+for watch mode, but Job sandboxes never receive the host checkout, Docker socket,
+Runner state, or credential. Use `--root` only as the explicit OrbStack fallback
+when its forwarded socket cannot be read by the container's normal `bun` user.

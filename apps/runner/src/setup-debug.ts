@@ -16,7 +16,7 @@ await startDebugRunnerUntilSynchronized({ start: startDebugRunner, synchronized:
 process.stdout.write(`Remote Runner ${runner.id} enrolled and its authenticated control connection synchronized.\n`)
 
 async function startDebugRunner(): Promise<void> {
-  const process = Bun.spawn(['bun', 'run', 'runner:debug', '--', 'up', '-d', 'runner'], { stdout: 'inherit', stderr: 'inherit' })
+  const process = Bun.spawn(['bun', 'run', 'runner:debug', '--', 'up', '-d', '--force-recreate', 'runner'], { stdout: 'inherit', stderr: 'inherit' })
   if (await process.exited !== 0) throw new Error('Could not start the debug Remote Runner service')
 }
 
