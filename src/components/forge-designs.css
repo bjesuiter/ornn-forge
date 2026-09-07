@@ -1662,8 +1662,23 @@
   padding: 28px 0;
 }
 .fd-runner-dialog {
-  width: min(calc(100% - 32px), 520px);
-  margin: auto;
+  width: 100vw;
+  max-width: none;
+  height: 100vh;
+  max-height: none;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  padding: 16px;
+  display: flex;
+  justify-content: safe center;
+  align-items: safe center;
+}
+.fd-runner-dialog::backdrop { background: rgba(20, 22, 25, 0.68); }
+.fd-runner-dialog-panel {
+  width: min(100%, 520px);
+  max-height: 100%;
+  overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
@@ -1671,7 +1686,6 @@
   box-shadow: 0 26px 80px rgba(0, 0, 0, 0.42);
   padding: 26px;
 }
-.fd-runner-dialog::backdrop { background: rgba(20, 22, 25, 0.68); }
 .fd-runner-dialog-header {
   display: flex;
   justify-content: space-between;
@@ -1779,7 +1793,8 @@
   }
   .fd-runner-overview-heading { align-items: start; flex-direction: column; }
   .fd-runner-add { width: 100%; }
-  .fd-runner-dialog { padding: 20px; }
+  .fd-runner-dialog { padding: 16px; }
+  .fd-runner-dialog-panel { padding: 20px; }
   .fd-setup-token { align-items: stretch; flex-direction: column; }
   .fd-setup-token button { min-height: 38px; }
   .fd-runner-toggle {
