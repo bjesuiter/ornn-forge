@@ -6,7 +6,7 @@ import { envelope } from '@ornn-forge/protocol'
 const runnerId = 'runner_v1_abcdefghijklmnopqrstuv'
 const recoveringRunnerId = 'runner_v1_zyxwvutsrqponmlkjihgfe'
 const profile = {
-  release: 'test', platform: 'linux', architecture: 'arm64', runtime: 'workerd', executor: 'fixture', capacity: 1,
+  release: 'test', platform: 'linux', architecture: 'arm64', runtime: 'workerd', executor: 'fixture', hardwareModel: 'Test host', capacity: 1,
   logicalCpuCount: 1, memoryLimitBytes: 134_217_728,
 }
 
@@ -78,7 +78,7 @@ async function createControlStateSchema(): Promise<void> {
   await env.ORNN_D1.batch([
     env.ORNN_D1.prepare('CREATE TABLE remote_runners (runner_id TEXT PRIMARY KEY, kind TEXT, desired_capacity INTEGER, enrollment_state TEXT, readiness_state TEXT, created_at TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE runner_credentials (runner_id TEXT PRIMARY KEY, credential_digest TEXT, created_at TEXT)'),
-    env.ORNN_D1.prepare('CREATE TABLE runner_profiles (runner_id TEXT PRIMARY KEY, release TEXT, platform TEXT, architecture TEXT, runtime TEXT, executor TEXT, capacity INTEGER, logical_cpu_count INTEGER, memory_limit_bytes INTEGER, updated_at TEXT)'),
+    env.ORNN_D1.prepare('CREATE TABLE runner_profiles (runner_id TEXT PRIMARY KEY, release TEXT, platform TEXT, architecture TEXT, runtime TEXT, executor TEXT, hardware_model TEXT, capacity INTEGER, logical_cpu_count INTEGER, memory_limit_bytes INTEGER, updated_at TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE runner_presence (runner_id TEXT PRIMARY KEY, last_seen_at TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE runner_error_states (runner_id TEXT PRIMARY KEY, code TEXT, occurred_at TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE runner_pauses (runner_id TEXT PRIMARY KEY, paused INTEGER, updated_at TEXT)'),

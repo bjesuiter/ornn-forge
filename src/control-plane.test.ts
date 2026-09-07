@@ -178,7 +178,7 @@ test('reconciles a reconnecting Runner against durable desired configuration', a
 
   const synchronized = await store.synchronizeRunner?.({
     runnerId: 'runner_homeserv1', instanceId: 'instance_v1_0123456789012345678901',
-    profile: { release: 'v1', platform: 'linux', architecture: 'arm64', runtime: 'Bun', executor: 'fixture', capacity: 2, logicalCpuCount: 4, memoryLimitBytes: 1_073_741_824 },
+    profile: { release: 'v1', platform: 'linux', architecture: 'arm64', runtime: 'Bun', executor: 'fixture', hardwareModel: 'Test host', capacity: 2, logicalCpuCount: 4, memoryLimitBytes: 1_073_741_824 },
     activeLeases: [], commandJournal: [],
   })
 

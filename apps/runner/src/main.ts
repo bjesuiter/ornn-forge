@@ -6,7 +6,7 @@ import {
   type RunnerLeaseClaim,
   type RunnerProfile,
 } from '@ornn-forge/protocol'
-import { unlink } from 'node:fs/promises'
+import { readFile, unlink } from 'node:fs/promises'
 import { createDockerCliGateway } from './docker-gateway'
 import { createRepositoryWorkspaceImporter, type RepositoryWorkspaceImporter } from './repository-workspace'
 import { createDockerSandboxDriver, type SandboxDriver, type SandboxLease } from './sandbox'
@@ -49,6 +49,7 @@ export type LeaseExecutor = (lease: LeaseGrant, signal: AbortSignal, lifecycle: 
 export async function remoteRunnerConfigFromEnvironment(
   environment: Record<string, string | undefined> = process.env,
   readCredentialFile: (path: string) => Promise<string> = (path) => Bun.file(path).text(),
+  readHardwareModel: () => Promise<string> = hardwareModelFromSystem,
 ): Promise<RemoteRunnerConfig> {
   const controlPlaneUrl = environment.ORNN_CONTROL_PLANE_URL
   const runnerId = environment.ORNN_RUNNER_ID
@@ -74,12 +75,41 @@ export async function remoteRunnerConfigFromEnvironment(
       architecture: process.arch,
       runtime: `Bun ${Bun.version}`,
       executor,
+      hardwareModel: environment.ORNN_RUNNER_HARDWARE_MODEL
+        ? hardwareModel(environment.ORNN_RUNNER_HARDWARE_MODEL)
+        : await readHardwareModel(),
       capacity: runnerCapacity(environment.ORNN_RUNNER_CAPACITY),
       logicalCpuCount: Math.max(1, navigator.hardwareConcurrency ?? 1),
       memoryLimitBytes: 128 * 1024 * 1024,
     },
     sandboxImage,
   }
+}
+
+export async function hardwareModelFromSystem(
+  platform = process.platform,
+  readSystemFile: (path: string) => Promise<string> = (path) => readFile(path, 'utf8'),
+  runCommand: (command: string, arguments_: string[]) => string = (command, arguments_) =>
+    new TextDecoder().decode(Bun.spawnSync([command, ...arguments_]).stdout),
+): Promise<string> {
+  if (platform === 'darwin') return hardwareModel(runCommand('sysctl', ['-n', 'hw.model']))
+  if (platform === 'linux') {
+    try {
+      return hardwareModel(await readSystemFile('/sys/devices/virtual/dmi/id/product_name'))
+    } catch {
+      try {
+        const cpuInfo = await readSystemFile('/proc/cpuinfo')
+        const model = cpuInfo.match(/^model name\s*:\s*(.+)$/m)?.[1]
+        if (model) return hardwareModel(model)
+      } catch {}
+    }
+  }
+  return 'Nicht erkannt'
+}
+
+function hardwareModel(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, ' ')
+  return normalized.length > 0 ? normalized.slice(0, 100) : 'Nicht erkannt'
 }
 
 export async function runRemoteRunner(

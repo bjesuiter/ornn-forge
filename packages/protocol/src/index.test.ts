@@ -11,7 +11,7 @@ test('accepts bounded Runner synchronization state', () => {
   expect(isRunnerSynchronization({
     runnerId: 'runner_v1_0123456789012345678901',
     instanceId: 'instance_v1_0123456789012345678901',
-    profile: { release: 'v1', platform: 'linux', architecture: 'arm64', runtime: 'Bun', executor: 'fixture', capacity: 1, logicalCpuCount: 4, memoryLimitBytes: 1_073_741_824 },
+    profile: { release: 'v1', platform: 'linux', architecture: 'arm64', runtime: 'Bun', executor: 'fixture', hardwareModel: 'Test host', capacity: 1, logicalCpuCount: 4, memoryLimitBytes: 1_073_741_824 },
     activeLeases: [], commandJournal: [],
   })).toBe(true)
 })

@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test'
 import { envelope, type RunnerProfile } from '@ornn-forge/protocol'
-import { executeDockerFixture, reconcileDockerSandboxes, reconnectDelay, remoteRunnerConfigFromEnvironment, runRemoteRunner, type ControlSocket, type RunnerControlState } from './main'
+import { executeDockerFixture, hardwareModelFromSystem, reconcileDockerSandboxes, reconnectDelay, remoteRunnerConfigFromEnvironment, runRemoteRunner, type ControlSocket, type RunnerControlState } from './main'
 import type { SandboxDriver, SandboxLease } from './sandbox'
 
 const profile: RunnerProfile = {
-  release: 'test', platform: 'linux', architecture: 'arm64', runtime: 'Bun test', executor: 'fixture', capacity: 1,
+  release: 'test', platform: 'linux', architecture: 'arm64', runtime: 'Bun test', executor: 'fixture', hardwareModel: 'Test host', capacity: 1,
   logicalCpuCount: 1, memoryLimitBytes: 134_217_728,
 }
 
@@ -14,6 +14,7 @@ test('the Runner reads its mounted credential file without placing the secret in
     ORNN_RUNNER_ID: 'runner_local_debug',
     ORNN_RUNNER_CREDENTIAL_FILE: '/run/secrets/runner_credential',
     ORNN_RUNNER_EXECUTOR: 'fixture',
+    ORNN_RUNNER_HARDWARE_MODEL: 'Mac mini',
   }, async (path) => {
     expect(path).toBe('/run/secrets/runner_credential')
     return 'credential-from-file\n'
@@ -23,8 +24,15 @@ test('the Runner reads its mounted credential file without placing the secret in
     controlPlaneUrl: 'https://control.test',
     runnerId: 'runner_local_debug',
     credential: 'credential-from-file',
-    profile: { platform: process.platform, architecture: process.arch, executor: 'fixture', capacity: 1 },
+    profile: { platform: process.platform, architecture: process.arch, executor: 'fixture', hardwareModel: 'Mac mini', capacity: 1 },
   })
+})
+
+test('the Runner reports the physical host model on Linux', async () => {
+  await expect(hardwareModelFromSystem('linux', async (path) => {
+    expect(path).toBe('/sys/devices/virtual/dmi/id/product_name')
+    return '  PowerEdge R760  \n'
+  })).resolves.toBe('PowerEdge R760')
 })
 
 test('the Docker fixture executes through the SandboxDriver and verifies cleanup before returning its artifact', async () => {

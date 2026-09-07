@@ -361,9 +361,9 @@ export function Dashboard({
                     </section>
                     {runner.profile && (
                       <section className="fd-runner-detail">
-                        <span>Runner-Umgebung</span>
-                        <strong>{runner.profile.release} · {runner.profile.executor}</strong>
-                        <small>{runner.profile.platform}/{runner.profile.architecture} · {runner.profile.runtime}</small>
+                        <span>Hardware & Umgebung</span>
+                        <strong>{runner.profile.hardwareModel}</strong>
+                        <small>{runner.profile.release} · {runner.profile.platform}/{runner.profile.architecture} · {runner.profile.runtime} · {runner.profile.executor}</small>
                       </section>
                     )}
                     {runner.recentJobs.length > 1 && (

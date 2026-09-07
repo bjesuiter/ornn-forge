@@ -10,6 +10,7 @@ const migrations = [
   '0006_pause_runners.sql',
   '0007_record_runner_diagnostics.sql',
   '0008_create_remote_runner_identities.sql',
+  '0011_add_runner_hardware_model.sql',
 ].map((name) => readFileSync(new URL(`../migrations/${name}`, import.meta.url), 'utf8'))
 
 test('the dashboard keeps runner presence, pause, faults, capacity, and work as independent dimensions', () => {
@@ -28,6 +29,7 @@ test('the dashboard keeps runner presence, pause, faults, capacity, and work as 
       architecture: 'arm64',
       runtime: 'Bun 1.4.0',
       executor: 'docker',
+      hardware_model: 'Macmini9,1',
       capacity: 2,
       reservations: 1,
     },
@@ -64,7 +66,7 @@ test('the dashboard keeps runner presence, pause, faults, capacity, and work as 
     lastSeenAt: '2026-09-06T12:00:00.000Z',
     paused: true,
     fault: { code: 'runner.operation_failed', occurredAt: '2026-09-06T11:59:30.000Z' },
-    profile: { release: 'v1.2.3', platform: 'linux', architecture: 'arm64', runtime: 'Bun 1.4.0', executor: 'docker', capacity: 2 },
+    profile: { release: 'v1.2.3', platform: 'linux', architecture: 'arm64', runtime: 'Bun 1.4.0', executor: 'docker', hardwareModel: 'Macmini9,1', capacity: 2 },
     reservations: 1,
     activeJobs: [{
       id: 'job_v1_active', repository: 'bjesuiter/ornn-forge', issueNumber: 42,

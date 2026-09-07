@@ -13,6 +13,7 @@ export type DashboardRunner = {
     architecture: string
     runtime: string
     executor: string
+    hardwareModel: string
     capacity: number
   }
   reservations: number
@@ -58,6 +59,7 @@ type DashboardRunnerRow = {
   architecture: string | null
   runtime: string | null
   executor: string | null
+  hardware_model: string | null
   capacity: number
   reservations: number
 }
@@ -97,7 +99,7 @@ export async function listDashboardRunners(
     database.prepare(`SELECT runner.runner_id, runner.enrollment_state, runner.readiness_state, runner.desired_capacity,
       p.last_seen_at, COALESCE(paused.paused, 0) AS paused,
       fault.code AS fault_code, fault.occurred_at AS fault_occurred_at,
-      profile.release, profile.platform, profile.architecture, profile.runtime, profile.executor,
+      profile.release, profile.platform, profile.architecture, profile.runtime, profile.executor, profile.hardware_model,
       COALESCE(profile.capacity, 1) AS capacity, COALESCE(reservation.count, 0) AS reservations
       FROM remote_runners runner
       LEFT JOIN runner_presence p ON p.runner_id = runner.runner_id
@@ -155,11 +157,11 @@ export function dashboardRunnersFromRows(
         ? undefined
         : { code: runner.fault_code, occurredAt: runner.fault_occurred_at },
       profile: runner.release === null || runner.platform === null || runner.architecture === null
-        || runner.runtime === null || runner.executor === null
+        || runner.runtime === null || runner.executor === null || runner.hardware_model === null
         ? undefined
         : {
             release: runner.release, platform: runner.platform, architecture: runner.architecture,
-            runtime: runner.runtime, executor: runner.executor, capacity: runner.capacity,
+            runtime: runner.runtime, executor: runner.executor, hardwareModel: runner.hardware_model, capacity: runner.capacity,
           },
       reservations: runner.reservations,
       activeJobs: activeJobs.get(runner.runner_id) ?? [],

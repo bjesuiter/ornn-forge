@@ -12,6 +12,7 @@ export type RunnerProfile = {
   architecture: string
   runtime: string
   executor: string
+  hardwareModel?: string
   capacity: number
   logicalCpuCount: number
   memoryLimitBytes: number
@@ -118,6 +119,7 @@ export function isRunnerProfile(value: unknown): value is RunnerProfile {
   if (!isRecord(value)) return false
   return isShortText(value.release) && isShortText(value.platform) && isShortText(value.architecture)
     && isShortText(value.runtime) && isShortText(value.executor)
+    && (value.hardwareModel === undefined || isShortText(value.hardwareModel))
     && typeof value.capacity === 'number' && Number.isInteger(value.capacity) && value.capacity >= 1 && value.capacity <= 32
     && typeof value.logicalCpuCount === 'number' && Number.isInteger(value.logicalCpuCount) && value.logicalCpuCount >= 1 && value.logicalCpuCount <= 256
     && typeof value.memoryLimitBytes === 'number' && Number.isSafeInteger(value.memoryLimitBytes) && value.memoryLimitBytes >= 134_217_728

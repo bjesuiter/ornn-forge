@@ -1266,14 +1266,15 @@ class D1InvocationStore implements InvocationStore {
 
   async updateRunnerProfile(runnerId: string, profile: RunnerProfile): Promise<void> {
     await this.database.prepare(`INSERT INTO runner_profiles (
-      runner_id, release, platform, architecture, runtime, executor, capacity, logical_cpu_count, memory_limit_bytes, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      runner_id, release, platform, architecture, runtime, executor, hardware_model, capacity, logical_cpu_count, memory_limit_bytes, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(runner_id) DO UPDATE SET release = excluded.release, platform = excluded.platform,
       architecture = excluded.architecture, runtime = excluded.runtime, executor = excluded.executor,
+      hardware_model = excluded.hardware_model,
       capacity = excluded.capacity, logical_cpu_count = excluded.logical_cpu_count,
       memory_limit_bytes = excluded.memory_limit_bytes, updated_at = excluded.updated_at`).bind(
       runnerId, profile.release, profile.platform, profile.architecture, profile.runtime, profile.executor,
-      profile.capacity, profile.logicalCpuCount, profile.memoryLimitBytes, new Date().toISOString(),
+      profile.hardwareModel ?? 'Nicht erkannt', profile.capacity, profile.logicalCpuCount, profile.memoryLimitBytes, new Date().toISOString(),
     ).run()
   }
 
