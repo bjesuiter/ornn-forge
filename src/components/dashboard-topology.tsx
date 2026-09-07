@@ -1,5 +1,6 @@
 import type { DashboardRunner } from '../dashboard-runners'
 import { DashboardHeader } from './dashboard-header'
+import './forge-designs.css'
 
 export function DashboardTopology({
   runners,
