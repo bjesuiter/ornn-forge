@@ -3,33 +3,48 @@ import { getRequestHeaders, setResponseHeader } from '@tanstack/react-start/serv
 import { env } from 'cloudflare:workers'
 import { auth } from './auth.server'
 import { createD1InvocationStore, createRemoteRunnerSetup, isRunnerLabel, type RemoteRunner } from './control-plane'
-import { listDashboardRunners } from './dashboard-runners'
-import { listDashboardWebhooks } from './dashboard-webhooks'
+import { listDashboardRunners, type DashboardRunner } from './dashboard-runners'
+import { listDashboardWebhooks, type DashboardWebhook } from './dashboard-webhooks'
 import {
   completeOpenAiSubscriptionAuthorization,
   disconnectOpenAiSubscription,
   getCachedOpenAiSubscriptionUsage,
   startOpenAiSubscriptionAuthorization,
+  type OpenAiSubscriptionUsage,
 } from './openai-subscription-usage'
+
+export type DashboardSnapshot = {
+  openAiUsage: OpenAiSubscriptionUsage
+  runners: DashboardRunner[]
+  webhooks: DashboardWebhook[]
+}
+
+export const getDashboardSnapshot = createServerFn({ method: 'GET' }).handler(async (): Promise<DashboardSnapshot> => {
+  setResponseHeader('Cache-Control', 'no-store')
+  await requireDashboardSession()
+  const [openAiUsage, runners, webhooks] = await Promise.all([
+    getCachedOpenAiSubscriptionUsage(env.ORNN_D1),
+    listDashboardRunners(env.ORNN_D1),
+    listDashboardWebhooks(env.ORNN_D1),
+  ])
+  return { openAiUsage, runners, webhooks }
+})
 
 export const getDashboardRunners = createServerFn({ method: 'GET' }).handler(async () => {
   setResponseHeader('Cache-Control', 'no-store')
-  const session = await auth.api.getSession({ headers: getRequestHeaders() })
-  if (!session) throw new Error('Dashboard session required')
+  await requireDashboardSession()
   return listDashboardRunners(env.ORNN_D1)
 })
 
 export const getDashboardWebhooks = createServerFn({ method: 'GET' }).handler(async () => {
   setResponseHeader('Cache-Control', 'no-store')
-  const session = await auth.api.getSession({ headers: getRequestHeaders() })
-  if (!session) throw new Error('Dashboard session required')
+  await requireDashboardSession()
   return listDashboardWebhooks(env.ORNN_D1)
 })
 
 export const getDashboardOpenAiUsage = createServerFn({ method: 'GET' }).handler(async () => {
   setResponseHeader('Cache-Control', 'no-store')
-  const session = await auth.api.getSession({ headers: getRequestHeaders() })
-  if (!session) throw new Error('Dashboard session required')
+  await requireDashboardSession()
   return getCachedOpenAiSubscriptionUsage(env.ORNN_D1)
 })
 
@@ -85,6 +100,11 @@ export const createDashboardRunner = createServerFn({ method: 'POST' })
     if (!session) throw new Error('Dashboard session required')
     return createRemoteRunnerSetup({ store: createD1InvocationStore(env.ORNN_D1) }, data.capacity)
   })
+
+async function requireDashboardSession() {
+  const session = await auth.api.getSession({ headers: getRequestHeaders() })
+  if (!session) throw new Error('Dashboard session required')
+}
 
 function isPauseRequest(value: unknown): value is { runnerId: string; paused: boolean } {
   return typeof value === 'object' && value !== null

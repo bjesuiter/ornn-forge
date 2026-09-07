@@ -4,6 +4,7 @@ import {
   dashboardRefreshIntervalMs,
   dashboardRefetchOptions,
 } from './dashboard-refresh'
+import { createDashboardSnapshotQueryOptions } from './dashboard-snapshot-query'
 
 test('dashboard refreshes in the foreground and on return to the tab', async () => {
   expect(dashboardRefetchOptions.refetchInterval).toBe(dashboardRefreshIntervalMs)
@@ -34,6 +35,23 @@ test('dashboard refreshes in the foreground and on return to the tab', async () 
     unsubscribe()
     client.unmount()
     focusManager.setFocused(wasFocused)
+  }
+})
+
+test('dashboard snapshot refresh uses one server request', async () => {
+  const client = new QueryClient()
+  let requests = 0
+  const observer = new QueryObserver(client, createDashboardSnapshotQueryOptions(async () => {
+    requests += 1
+    return { requests }
+  }))
+  const unsubscribe = observer.subscribe(() => undefined)
+
+  try {
+    await nextTask()
+    expect(requests).toBe(1)
+  } finally {
+    unsubscribe()
   }
 })
 

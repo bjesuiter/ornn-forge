@@ -6,9 +6,7 @@ import {
   completeDashboardOpenAiSubscriptionAuthorization,
   createDashboardRunner,
   disconnectDashboardOpenAiSubscription,
-  getDashboardOpenAiUsage,
-  getDashboardRunners,
-  getDashboardWebhooks,
+  getDashboardSnapshot,
   setDashboardRunnerLabel,
   setDashboardRunnerPaused,
   startDashboardOpenAiSubscriptionAuthorization,
@@ -16,10 +14,7 @@ import {
 import { dashboardSnapshotQueryOptions } from '../dashboard-queries'
 
 export const Route = createFileRoute('/dashboard/')({
-  loader: async () => {
-    const [openAiUsage, runners, webhooks] = await Promise.all([getDashboardOpenAiUsage(), getDashboardRunners(), getDashboardWebhooks()])
-    return { openAiUsage, runners, webhooks }
-  },
+  loader: () => getDashboardSnapshot(),
   component: DashboardRoute,
 })
 

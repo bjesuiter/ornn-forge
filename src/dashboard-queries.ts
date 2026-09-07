@@ -1,23 +1,12 @@
 import { queryOptions } from '@tanstack/react-query'
 import {
-  getDashboardOpenAiUsage,
   getDashboardRunners,
-  getDashboardWebhooks,
+  getDashboardSnapshot,
 } from './dashboard.functions'
 import { dashboardRefetchOptions } from './dashboard-refresh'
+import { createDashboardSnapshotQueryOptions } from './dashboard-snapshot-query'
 
-export const dashboardSnapshotQueryOptions = () => queryOptions({
-  queryKey: ['dashboard', 'snapshot'] as const,
-  queryFn: async () => {
-    const [openAiUsage, runners, webhooks] = await Promise.all([
-      getDashboardOpenAiUsage(),
-      getDashboardRunners(),
-      getDashboardWebhooks(),
-    ])
-    return { openAiUsage, runners, webhooks }
-  },
-  ...dashboardRefetchOptions,
-})
+export const dashboardSnapshotQueryOptions = () => createDashboardSnapshotQueryOptions(getDashboardSnapshot)
 
 export const dashboardRunnersQueryOptions = () => queryOptions({
   queryKey: ['dashboard', 'runners'] as const,
