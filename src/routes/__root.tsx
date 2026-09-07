@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useState, type ReactNode } from 'react'
 import {
   createRootRoute,
   HeadContent,
@@ -24,10 +25,14 @@ export const Route = createRootRoute({
 })
 
 function RootComponent() {
+  const [queryClient] = useState(() => new QueryClient())
+
   return (
-    <RootDocument>
-      <Outlet />
-    </RootDocument>
+    <QueryClientProvider client={queryClient}>
+      <RootDocument>
+        <Outlet />
+      </RootDocument>
+    </QueryClientProvider>
   )
 }
 

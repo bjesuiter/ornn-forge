@@ -1,5 +1,5 @@
-import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
-import { useEffect } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { authClient } from '../auth-client'
 import { Dashboard } from '../components/dashboard-placeholder'
 import {
@@ -13,6 +13,7 @@ import {
   setDashboardRunnerPaused,
   startDashboardOpenAiSubscriptionAuthorization,
 } from '../dashboard.functions'
+import { dashboardSnapshotQueryOptions } from '../dashboard-queries'
 
 export const Route = createFileRoute('/dashboard/')({
   loader: async () => {
@@ -24,13 +25,12 @@ export const Route = createFileRoute('/dashboard/')({
 
 function DashboardRoute() {
   const navigate = useNavigate()
-  const router = useRouter()
-  const { openAiUsage, runners, webhooks } = Route.useLoaderData()
-
-  useEffect(() => {
-    const refresh = window.setInterval(() => void router.invalidate(), 5_000)
-    return () => window.clearInterval(refresh)
-  }, [router])
+  const queryClient = useQueryClient()
+  const initialDashboard = Route.useLoaderData()
+  const { data: { openAiUsage, runners, webhooks } } = useQuery({
+    ...dashboardSnapshotQueryOptions(),
+    initialData: initialDashboard,
+  })
 
   async function signOut() {
     const result = await authClient.signOut()
@@ -43,33 +43,33 @@ function DashboardRoute() {
 
   async function setRunnerPaused(runnerId: string, paused: boolean) {
     await setDashboardRunnerPaused({ data: { runnerId, paused } })
-    await router.invalidate()
+    await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
   }
 
   async function setRunnerLabel(runnerId: string, label: string) {
     await setDashboardRunnerLabel({ data: { runnerId, label } })
-    await router.invalidate()
+    await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
   }
 
   async function createRunner(capacity: number) {
     const created = await createDashboardRunner({ data: { capacity } })
-    await router.invalidate()
+    await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
     return created
   }
 
   async function startOpenAiSubscriptionAuthorization() {
     await startDashboardOpenAiSubscriptionAuthorization()
-    await router.invalidate()
+    await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
   }
 
   async function completeOpenAiSubscriptionAuthorization() {
     await completeDashboardOpenAiSubscriptionAuthorization()
-    await router.invalidate()
+    await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
   }
 
   async function disconnectOpenAiSubscription() {
     await disconnectDashboardOpenAiSubscription()
-    await router.invalidate()
+    await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
   }
 
   return <Dashboard
