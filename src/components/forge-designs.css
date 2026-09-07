@@ -1259,6 +1259,30 @@
 .fd-placeholder-header .fd-text-button {
   font-size: 14px !important;
 }
+.fd-dashboard-navigation {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: auto;
+}
+.fd-dashboard-navigation a {
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 11px;
+}
+.fd-dashboard-navigation a:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.fd-dashboard-navigation a[aria-current='page'] {
+  background: var(--surface);
+  color: var(--accent);
+}
+.fd-dashboard-header-error {
+  margin: 16px clamp(18px, 4vw, 48px) 0;
+}
 .fd-placeholder .fd-main {
   max-width: 1240px;
   padding-top: clamp(48px, 10vw, 108px);
@@ -1840,7 +1864,128 @@
   color: #d38770 !important;
 }
 .fd-runner-setup-result .fd-dialog-primary { display: block; margin-top: 28px; margin-left: auto; }
+.fd-topology {
+  max-width: 940px;
+}
+.fd-topology-heading {
+  max-width: 600px;
+  padding-bottom: 32px;
+}
+.fd-topology-heading .fd-kicker,
+.fd-topology-kind {
+  margin-bottom: 10px;
+}
+.fd-topology-heading h1 {
+  max-width: none;
+}
+.fd-topology-heading > p:last-child {
+  color: var(--muted);
+  margin-top: 16px;
+}
+.fd-topology-map {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) 72px minmax(0, 1.3fr);
+  align-items: stretch;
+}
+.fd-topology-control-plane,
+.fd-topology-runners {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 24px;
+}
+.fd-topology-control-plane {
+  align-self: center;
+  background: var(--surface);
+}
+.fd-topology-control-plane h2,
+.fd-topology-runners h2 {
+  font: 500 26px/1.1 var(--display);
+  letter-spacing: -0.03em;
+}
+.fd-topology-control-plane > p:last-child {
+  color: var(--muted);
+  font-size: 12px !important;
+  margin-top: 14px;
+}
+.fd-topology-kind {
+  color: var(--accent);
+  font-size: 10px !important;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.fd-topology-link {
+  align-self: center;
+  border-top: 1px solid var(--accent);
+}
+.fd-topology-link::after {
+  content: '';
+  display: block;
+  width: 7px;
+  height: 7px;
+  margin: -4px 0 0 auto;
+  border-top: 1px solid var(--accent);
+  border-right: 1px solid var(--accent);
+  transform: rotate(45deg);
+}
+.fd-topology-runners ul {
+  display: grid;
+  gap: 12px;
+  list-style: none;
+  margin: 20px 0 0;
+  padding: 0;
+}
+.fd-topology-runner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  border-left: 2px solid var(--line);
+  padding: 4px 0 4px 12px;
+}
+.fd-topology-runner h3 {
+  font: 600 14px/1.3 'DM Sans', sans-serif;
+}
+.fd-topology-runner > div > p {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px !important;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+.fd-topology-runner dl {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 14px;
+  margin: 0;
+}
+.fd-topology-runner dt {
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.fd-topology-runner dd {
+  margin: 4px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.fd-topology-runner dd.is-online { color: #a4c3ae; }
+.fd-topology-runner dd.is-offline { color: var(--muted); }
+.fd-topology-empty {
+  color: var(--muted);
+  font-size: 12px !important;
+  margin-top: 20px;
+}
 @media (max-width: 600px) {
+  .fd-placeholder-header {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .fd-dashboard-navigation {
+    order: 3;
+    flex-basis: 100%;
+  }
   .fd-openai-usage { margin-bottom: 58px; }
   .fd-openai-usage-heading { align-items: start; flex-direction: column; gap: 8px; }
   .fd-openai-usage-list { grid-template-columns: 1fr; gap: 20px; }
@@ -1863,5 +2008,28 @@
   .fd-setup-token button { min-height: 38px; }
   .fd-runner-toggle {
     justify-self: start;
+  }
+  .fd-topology-map {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .fd-topology-link {
+    width: 1px;
+    height: 24px;
+    justify-self: center;
+    border-top: 0;
+    border-left: 1px solid var(--accent);
+  }
+  .fd-topology-link::after {
+    margin: auto auto -1px -4px;
+    position: relative;
+    top: 100%;
+    transform: rotate(135deg);
+  }
+  .fd-topology-runner {
+    grid-template-columns: 1fr;
+  }
+  .fd-topology-runner dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

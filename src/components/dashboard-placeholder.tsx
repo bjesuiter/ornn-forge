@@ -3,6 +3,7 @@ import type { RemoteRunner } from '../control-plane'
 import type { DashboardRunner } from '../dashboard-runners'
 import type { DashboardWebhook } from '../dashboard-webhooks'
 import type { OpenAiSubscriptionUsage } from '../openai-subscription-usage'
+import { DashboardHeader } from './dashboard-header'
 import './forge-designs.css'
 
 const setupTokenLifetimeMs = 15 * 60_000
@@ -32,8 +33,6 @@ export function Dashboard({
   onCompleteOpenAiSubscriptionAuthorization: () => Promise<void>
   onDisconnectOpenAiSubscription: () => Promise<void>
 }) {
-  const [signingOut, setSigningOut] = useState(false)
-  const [error, setError] = useState(false)
   const [updatingRunnerId, setUpdatingRunnerId] = useState<string>()
   const [editingRunnerId, setEditingRunnerId] = useState<string>()
   const [runnerLabel, setRunnerLabel] = useState('')
@@ -65,18 +64,6 @@ export function Dashboard({
       setShowRunnerDialog(false)
     }
   }, [createdRunner, runners])
-
-  async function signOut() {
-    setSigningOut(true)
-    setError(false)
-    try {
-      await onSignOut()
-    } catch {
-      setError(true)
-    } finally {
-      setSigningOut(false)
-    }
-  }
 
   async function setRunnerPaused(runner: DashboardRunner) {
     setUpdatingRunnerId(runner.id)
@@ -165,32 +152,8 @@ export function Dashboard({
       <a className="fd-skip" href="#fd-main">
         Zum Inhalt
       </a>
-      <header className="fd-placeholder-header">
-        <a
-          href="/dashboard"
-          className="fd-brand"
-          aria-label="Ornn Forge Dashboard"
-        >
-          <img src="/favicon.png" width="40" height="40" alt="" />
-          <span>
-            ORNN<span>FORGE</span>
-          </span>
-        </a>
-        <button
-          className="fd-text-button"
-          type="button"
-          onClick={signOut}
-          disabled={signingOut}
-        >
-          {signingOut ? 'Wird abgemeldet …' : 'Abmelden'}
-        </button>
-      </header>
+      <DashboardHeader currentPage="dashboard" onSignOut={onSignOut} />
       <main id="fd-main" className="fd-main" tabIndex={-1}>
-        {error && (
-          <p className="fd-error" role="alert">
-            Abmelden fehlgeschlagen. Bitte versuche es erneut.
-          </p>
-        )}
         {runnerError && (
           <p className="fd-error" role="alert">
             Runner konnte nicht aktualisiert werden. Bitte versuche es erneut.

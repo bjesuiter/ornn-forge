@@ -13,6 +13,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardIndexRouteImport } from './routes/dashboard.index'
+import { Route as DashboardTopologyRouteImport } from './routes/dashboard.topology'
 import { Route as DashboardExamplesRouteImport } from './routes/dashboard.examples'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiV1RunnerConnectRouteImport } from './routes/api/v1/runner/connect'
@@ -39,6 +40,11 @@ const IndexRoute = IndexRouteImport.update({
 const DashboardIndexRoute = DashboardIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => DashboardRoute,
+} as any)
+const DashboardTopologyRoute = DashboardTopologyRouteImport.update({
+  id: '/topology',
+  path: '/topology',
   getParentRoute: () => DashboardRoute,
 } as any)
 const DashboardExamplesRoute = DashboardExamplesRouteImport.update({
@@ -83,6 +89,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof DashboardRouteWithChildren
   '/login': typeof LoginRoute
   '/dashboard/examples': typeof DashboardExamplesRoute
+  '/dashboard/topology': typeof DashboardTopologyRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
@@ -95,6 +102,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/dashboard/examples': typeof DashboardExamplesRoute
+  '/dashboard/topology': typeof DashboardTopologyRoute
   '/dashboard': typeof DashboardIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
@@ -109,6 +117,7 @@ export interface FileRoutesById {
   '/dashboard': typeof DashboardRouteWithChildren
   '/login': typeof LoginRoute
   '/dashboard/examples': typeof DashboardExamplesRoute
+  '/dashboard/topology': typeof DashboardTopologyRoute
   '/dashboard/': typeof DashboardIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
@@ -124,6 +133,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/login'
     | '/dashboard/examples'
+    | '/dashboard/topology'
     | '/dashboard/'
     | '/api/auth/$'
     | '/api/v1/github/webhook'
@@ -136,6 +146,7 @@ export interface FileRouteTypes {
     | '/'
     | '/login'
     | '/dashboard/examples'
+    | '/dashboard/topology'
     | '/dashboard'
     | '/api/auth/$'
     | '/api/v1/github/webhook'
@@ -149,6 +160,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/login'
     | '/dashboard/examples'
+    | '/dashboard/topology'
     | '/dashboard/'
     | '/api/auth/$'
     | '/api/v1/github/webhook'
@@ -198,6 +210,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/dashboard/'
       preLoaderRoute: typeof DashboardIndexRouteImport
+      parentRoute: typeof DashboardRoute
+    }
+    '/dashboard/topology': {
+      id: '/dashboard/topology'
+      path: '/topology'
+      fullPath: '/dashboard/topology'
+      preLoaderRoute: typeof DashboardTopologyRouteImport
       parentRoute: typeof DashboardRoute
     }
     '/dashboard/examples': {
@@ -254,11 +273,13 @@ declare module '@tanstack/react-router' {
 
 interface DashboardRouteChildren {
   DashboardExamplesRoute: typeof DashboardExamplesRoute
+  DashboardTopologyRoute: typeof DashboardTopologyRoute
   DashboardIndexRoute: typeof DashboardIndexRoute
 }
 
 const DashboardRouteChildren: DashboardRouteChildren = {
   DashboardExamplesRoute: DashboardExamplesRoute,
+  DashboardTopologyRoute: DashboardTopologyRoute,
   DashboardIndexRoute: DashboardIndexRoute,
 }
 
