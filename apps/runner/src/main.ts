@@ -9,7 +9,7 @@ import {
 import { unlink } from 'node:fs/promises'
 import { createDockerCliGateway } from './docker-gateway'
 import { createRepositoryWorkspaceImporter, type RepositoryWorkspaceImporter } from './repository-workspace'
-import { createDockerSandboxDriver, type SandboxDriver } from './sandbox'
+import { createDockerSandboxDriver, type SandboxDriver, type SandboxLease } from './sandbox'
 
 export type RemoteRunnerConfig = {
   controlPlaneUrl: string
@@ -22,7 +22,10 @@ export type RemoteRunnerConfig = {
 export type RunnerControlState = {
   activeLeases: RunnerLeaseClaim[]
   commandJournal: RunnerCommandJournalEntry[]
+  sandboxes: RunnerSandboxRecord[]
 }
+
+export type RunnerSandboxRecord = { jobId?: string; leaseToken?: string; sandbox: SandboxLease }
 
 export type RunnerStateStore = {
   load(): Promise<RunnerControlState>
@@ -40,7 +43,8 @@ export type ControlSocket = {
 export type WebSocketFactory = (url: string, headers: Record<string, string>) => ControlSocket
 
 type Sleep = (milliseconds: number) => Promise<void>
-export type LeaseExecutor = (lease: LeaseGrant, signal: AbortSignal) => Promise<{ artifact: ReturnType<typeof fixtureArtifact>; cleanupStatus: 'verified' | 'failed' }>
+type SandboxLifecycle = { created(sandbox: SandboxLease): Promise<void>; cleaned(sandbox: SandboxLease): Promise<void> }
+export type LeaseExecutor = (lease: LeaseGrant, signal: AbortSignal, lifecycle: SandboxLifecycle) => Promise<{ artifact: ReturnType<typeof fixtureArtifact>; cleanupStatus: 'verified' | 'failed' }>
 
 export async function remoteRunnerConfigFromEnvironment(
   environment: Record<string, string | undefined> = process.env,
@@ -88,17 +92,25 @@ export async function runRemoteRunner(
     signal?: AbortSignal
     onSynchronized?: () => void
     executeLease?: LeaseExecutor
+    reconcileSandboxes?: (state: RunnerControlState) => Promise<void>
   } = {},
 ): Promise<void> {
   const stateStore = options.stateStore ?? fileRunnerStateStore()
   const createSocket = options.createSocket ?? bunWebSocket
   const sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)))
   const random = options.random ?? Math.random
+  const state = await stateStore.load()
+  const reconcileSandboxes = options.reconcileSandboxes ?? defaultSandboxReconciler(config)
   await stateStore.clearSynchronization?.()
   let attempt = 0
   while (!options.signal?.aborted) {
     try {
-      const connection = await openControlConnection(config, stateStore, createSocket, options.onSynchronized, options.executeLease ?? defaultLeaseExecutor(config))
+      try {
+        await reconcileSandboxes(state)
+      } finally {
+        await stateStore.save(state)
+      }
+      const connection = await openControlConnection(config, state, stateStore, createSocket, options.onSynchronized, options.executeLease ?? defaultLeaseExecutor(config))
       attempt = 0
       await connection.closed
     } catch {
@@ -113,7 +125,16 @@ function defaultLeaseExecutor(config: RemoteRunnerConfig): LeaseExecutor {
   if (!config.sandboxImage) throw new Error('Docker Runner is missing its digest-pinned sandbox image')
   const driver = createDockerSandboxDriver({ gateway: createDockerCliGateway() })
   const importWorkspace = createRepositoryWorkspaceImporter()
-  return (lease, signal) => executeDockerFixture({ runnerId: config.runnerId, image: config.sandboxImage as string, driver, importWorkspace }, lease, signal)
+  return (lease, signal, lifecycle) => executeDockerFixture({
+    runnerId: config.runnerId, image: config.sandboxImage as string, driver, importWorkspace,
+    onSandboxCreated: lifecycle.created, onSandboxCleaned: lifecycle.cleaned,
+  }, lease, signal)
+}
+
+function defaultSandboxReconciler(config: RemoteRunnerConfig): (state: RunnerControlState) => Promise<void> {
+  if (config.profile.executor !== 'docker') return async () => undefined
+  const driver = createDockerSandboxDriver({ gateway: createDockerCliGateway() })
+  return (state) => reconcileDockerSandboxes(state, driver, config.runnerId)
 }
 
 export function reconnectDelay(attempt: number, random: () => number = Math.random): number {
@@ -124,12 +145,12 @@ export function reconnectDelay(attempt: number, random: () => number = Math.rand
 
 async function openControlConnection(
   config: RemoteRunnerConfig,
+  state: RunnerControlState,
   stateStore: RunnerStateStore,
   createSocket: WebSocketFactory,
   onSynchronized: (() => void) | undefined,
   executeLease: LeaseExecutor,
 ): Promise<{ closed: Promise<void> }> {
-  const state = await stateStore.load()
   const socket = createSocket(controlSocketUrl(config.controlPlaneUrl), {
     authorization: `Bearer ${config.credential}`,
     'x-ornn-runner-id': config.runnerId,
@@ -225,8 +246,20 @@ async function handleControlMessage(
     }
     context.socket.send(JSON.stringify(envelope('lease.accept', leaseScope(context.config, lease))))
     context.socket.send(JSON.stringify(envelope('lease.heartbeat', leaseScope(context.config, lease))))
-    const completion = await context.executeLease(lease, new AbortController().signal)
+    const completion = await context.executeLease(lease, new AbortController().signal, {
+      async created(sandbox) {
+        context.state.sandboxes = context.state.sandboxes.filter((record) => record.sandbox.providerRef !== sandbox.providerRef)
+        context.state.sandboxes.push({ jobId: lease.jobId, leaseToken: lease.leaseToken, sandbox })
+        await context.stateStore.save(context.state)
+      },
+      async cleaned(sandbox) {
+        context.state.sandboxes = context.state.sandboxes.filter((record) => record.sandbox.providerRef !== sandbox.providerRef)
+        await context.stateStore.save(context.state)
+      },
+    })
     context.socket.send(JSON.stringify(envelope('lease.result', { ...leaseScope(context.config, lease), ...completion })))
+    context.state.activeLeases = context.state.activeLeases.filter((active) => active.jobId !== lease.jobId)
+    await context.stateStore.save(context.state)
   }
 }
 
@@ -237,12 +270,12 @@ function fileRunnerStateStore(
   return {
     async load() {
       const text = await Bun.file(statePath).text().catch(() => '')
-      if (!text) return { activeLeases: [], commandJournal: [] }
+      if (!text) return { activeLeases: [], commandJournal: [], sandboxes: [] }
       try {
         const value = JSON.parse(text)
-        return isRunnerControlState(value) ? value : { activeLeases: [], commandJournal: [] }
+        return isRunnerControlState(value) ? { ...value, sandboxes: value.sandboxes ?? [] } : { activeLeases: [], commandJournal: [], sandboxes: [] }
       } catch {
-        return { activeLeases: [], commandJournal: [] }
+        return { activeLeases: [], commandJournal: [], sandboxes: [] }
       }
     },
     async save(state) {
@@ -277,10 +310,27 @@ function reconnectStateEntry(value: unknown): value is RunnerCommandJournalEntry
 
 function isRunnerControlState(value: unknown): value is RunnerControlState {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const state = value as { activeLeases?: unknown; commandJournal?: unknown }
+  const state = value as { activeLeases?: unknown; commandJournal?: unknown; sandboxes?: unknown }
   return Array.isArray(state.activeLeases) && state.activeLeases.every((lease) =>
     typeof lease === 'object' && lease !== null && typeof (lease as { jobId?: unknown }).jobId === 'string' && typeof (lease as { leaseToken?: unknown }).leaseToken === 'string',
   ) && Array.isArray(state.commandJournal) && state.commandJournal.every(reconnectStateEntry)
+    && (state.sandboxes === undefined || (Array.isArray(state.sandboxes) && state.sandboxes.every(isRunnerSandboxRecord)))
+}
+
+function isRunnerSandboxRecord(value: unknown): value is RunnerSandboxRecord {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const record = value as { jobId?: unknown; leaseToken?: unknown; sandbox?: unknown }
+  return (record.jobId === undefined || typeof record.jobId === 'string')
+    && (record.leaseToken === undefined || typeof record.leaseToken === 'string')
+    && isSandboxLease(record.sandbox)
+}
+
+function isSandboxLease(value: unknown): value is SandboxLease {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const sandbox = value as Partial<SandboxLease>
+  return typeof sandbox.sandboxId === 'string' && typeof sandbox.runnerId === 'string' && typeof sandbox.providerRef === 'string'
+    && typeof sandbox.specFingerprint === 'string' && typeof sandbox.createdAt === 'string' && typeof sandbox.expiresAt === 'string'
+    && Number.isSafeInteger(sandbox.generation) && Array.isArray(sandbox.volumeIds) && sandbox.volumeIds.every((volume) => typeof volume === 'string')
 }
 
 function isLeaseGrant(value: unknown): value is LeaseGrant {
@@ -307,7 +357,7 @@ function fixtureArtifact() {
 }
 
 export async function executeDockerFixture(
-  options: { runnerId: string; image: string; driver: SandboxDriver; now?: () => string; importWorkspace?: RepositoryWorkspaceImporter },
+  options: { runnerId: string; image: string; driver: SandboxDriver; now?: () => string; importWorkspace?: RepositoryWorkspaceImporter; onSandboxCreated?: (sandbox: SandboxLease) => Promise<void>; onSandboxCleaned?: (sandbox: SandboxLease) => Promise<void> },
   lease: LeaseGrant,
   signal: AbortSignal,
 ): Promise<{ artifact: ReturnType<typeof fixtureArtifact>; cleanupStatus: 'verified' | 'failed' }> {
@@ -324,6 +374,7 @@ export async function executeDockerFixture(
     resources: { memoryBytes: 128 * 1024 * 1024, pidsLimit: 64 },
   }, signal)
   try {
+    await options.onSandboxCreated?.(sandbox)
     if (!lease.checkout) throw new Error('Docker execution requires a pinned repository checkout')
     if (!options.importWorkspace) throw new Error('Docker execution is missing its repository workspace importer')
     await options.importWorkspace(lease.checkout, sandbox, options.driver, signal)
@@ -335,15 +386,36 @@ export async function executeDockerFixture(
     try {
       await options.driver.terminate(sandbox, 'completed').catch(() => undefined)
       await options.driver.destroy(sandbox)
+      await options.onSandboxCleaned?.(sandbox)
       return { artifact, cleanupStatus: 'verified' }
     } catch {
       return { artifact, cleanupStatus: 'failed' }
     }
   } catch (error) {
     await options.driver.terminate(sandbox, 'failed').catch(() => undefined)
-    await options.driver.destroy(sandbox).catch(() => undefined)
+    const destroyed = await options.driver.destroy(sandbox).then(() => true, () => false)
+    if (destroyed) await options.onSandboxCleaned?.(sandbox)
     throw error
   }
+}
+
+export async function reconcileDockerSandboxes(state: RunnerControlState, driver: SandboxDriver, runnerId: string): Promise<void> {
+  const discovered = await driver.discover({ runnerId })
+  const records = new Map(state.sandboxes.map((record) => [record.sandbox.providerRef, record]))
+  for (const sandbox of discovered) {
+    if (!records.has(sandbox.providerRef)) records.set(sandbox.providerRef, { sandbox })
+  }
+  const unresolved: RunnerSandboxRecord[] = []
+  for (const record of records.values()) {
+    try {
+      await driver.terminate(record.sandbox, 'failed').catch(() => undefined)
+      await driver.destroy(record.sandbox)
+    } catch {
+      unresolved.push(record)
+    }
+  }
+  state.sandboxes = unresolved
+  if (unresolved.length > 0) throw new Error('Runner has unresolved sandbox cleanup')
 }
 
 function opaqueInstanceId(): string {

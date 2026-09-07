@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { envelope, type RunnerProfile } from '@ornn-forge/protocol'
-import { executeDockerFixture, reconnectDelay, remoteRunnerConfigFromEnvironment, runRemoteRunner, type ControlSocket, type RunnerControlState } from './main'
-import type { SandboxDriver } from './sandbox'
+import { executeDockerFixture, reconcileDockerSandboxes, reconnectDelay, remoteRunnerConfigFromEnvironment, runRemoteRunner, type ControlSocket, type RunnerControlState } from './main'
+import type { SandboxDriver, SandboxLease } from './sandbox'
 
 const profile: RunnerProfile = {
   release: 'test', platform: 'linux', architecture: 'arm64', runtime: 'Bun test', executor: 'fixture', capacity: 1,
@@ -59,6 +59,8 @@ test('the Docker fixture executes through the SandboxDriver and verifies cleanup
       expect(lease.providerRef).toBe('container-123')
       calls.push('import:deadbeef')
     },
+    async onSandboxCreated(sandbox) { calls.push(`record:${sandbox.providerRef}`) },
+    async onSandboxCleaned(sandbox) { calls.push(`clear:${sandbox.providerRef}`) },
   }, {
     jobId: 'job_v1_abcdefghijklmnopqrstuv', leaseToken: 'lease_v1_123', generation: 1, expiresAt: '2026-09-07T12:15:00.000Z',
     repository: { fullName: 'bjesuiter/ornn-forge' },
@@ -74,12 +76,64 @@ test('the Docker fixture executes through the SandboxDriver and verifies cleanup
   expect(completion).toMatchObject({ artifact: { schemaVersion: 1, kind: 'plan', summary: 'Fixture analysis complete' }, cleanupStatus: 'verified' })
   expect(calls).toEqual([
     'create:sandbox_v1_job_v1_abcdefghijklmnopqrstuv-1:busybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'record:container-123',
     'import:deadbeef',
     "exec:sh -ceu printf '{\"kind\":\"plan\"}\\n' > /workspace/fixture-artifact.json",
     'collect:/workspace/fixture-artifact.json',
     'terminate:completed',
     'destroy',
+    'clear:container-123',
   ])
+})
+
+test('Runner startup removes a persisted sandbox before it accepts new work', async () => {
+  const calls: string[] = []
+  const sandbox: SandboxLease = {
+    sandboxId: 'sandbox_v1_abandoned', generation: 1, runnerId: 'runner_v1_abcdefghijklmnopqrstuv', providerRef: 'container-123',
+    specFingerprint: 'docker-fixture-v1', createdAt: '2026-09-07T12:00:00.000Z', expiresAt: '2026-09-07T12:15:00.000Z', volumeIds: ['volume-123'],
+  }
+  const driver: SandboxDriver = {
+    async create() { return sandbox },
+    async discover() { return [sandbox] },
+    async inspect() { return { state: 'absent', observedAt: '2026-09-07T12:05:00.000Z' } },
+    async exec() { throw new Error('not used') },
+    async readFile() { throw new Error('not used') },
+    async writeFile() { throw new Error('not used') },
+    async collectArtifacts() { return new Map() },
+    async terminate(_sandbox, reason) { calls.push(`terminate:${reason}`) },
+    async destroy() { calls.push('destroy') },
+  }
+  const state: RunnerControlState = {
+    activeLeases: [{ jobId: 'job_v1_abandoned', leaseToken: 'lease_v1_abandoned' }], commandJournal: [],
+    sandboxes: [{ jobId: 'job_v1_abandoned', leaseToken: 'lease_v1_abandoned', sandbox }],
+  }
+
+  await reconcileDockerSandboxes(state, driver, sandbox.runnerId)
+
+  expect(calls).toEqual(['terminate:failed', 'destroy'])
+  expect(state.sandboxes).toEqual([])
+})
+
+test('Runner startup retains an unresolved sandbox and refuses new work', async () => {
+  const sandbox: SandboxLease = {
+    sandboxId: 'sandbox_v1_unresolved', generation: 1, runnerId: 'runner_v1_abcdefghijklmnopqrstuv', providerRef: 'container-456',
+    specFingerprint: 'docker-fixture-v1', createdAt: '2026-09-07T12:00:00.000Z', expiresAt: '2026-09-07T12:15:00.000Z', volumeIds: [],
+  }
+  const driver: SandboxDriver = {
+    async create() { return sandbox },
+    async discover() { return [sandbox] },
+    async inspect() { return { state: 'present', phase: 'faulted', processes: 'unknown', specFingerprint: sandbox.specFingerprint, observedAt: '' } },
+    async exec() { throw new Error('not used') },
+    async readFile() { throw new Error('not used') },
+    async writeFile() { throw new Error('not used') },
+    async collectArtifacts() { return new Map() },
+    async terminate() { throw new Error('Docker unavailable') },
+    async destroy() { throw new Error('Docker unavailable') },
+  }
+  const state: RunnerControlState = { activeLeases: [], commandJournal: [], sandboxes: [{ sandbox }] }
+
+  await expect(reconcileDockerSandboxes(state, driver, sandbox.runnerId)).rejects.toThrow('unresolved sandbox cleanup')
+  expect(state.sandboxes).toEqual([{ sandbox }])
 })
 
 test('the Runner synchronizes its credential-free recovery state before accepting fixture work', async () => {
@@ -93,6 +147,7 @@ test('the Runner synchronizes its credential-free recovery state before acceptin
   const state: RunnerControlState = {
     activeLeases: [{ jobId: 'job_recovered', leaseToken: 'lease_recovered' }],
     commandJournal: [{ commandId: 'command_recovered', state: 'completed' }],
+    sandboxes: [],
   }
 
   await runRemoteRunner({ controlPlaneUrl: 'https://control.test', runnerId: 'runner_homeserv1', credential: 'r'.repeat(32), profile }, {
@@ -117,7 +172,7 @@ test('the Runner synchronizes its credential-free recovery state before acceptin
   expect(JSON.parse(socket.sent[0])).toMatchObject({
     type: 'runner.synchronize', payload: { runnerId: 'runner_homeserv1', activeLeases: state.activeLeases, commandJournal: state.commandJournal },
   })
-  expect(saved).toHaveLength(1)
+  expect(saved).toHaveLength(2)
   expect(cleared).toBe(1)
   expect(ready).toBe(1)
 })
@@ -130,7 +185,7 @@ test('the Runner persists a lease before accepting and completing it', async () 
   await runRemoteRunner({ controlPlaneUrl: 'https://control.test', runnerId: 'runner_homeserv1', credential: 'r'.repeat(32), profile }, {
     signal: controller.signal,
     stateStore: {
-      async load() { return { activeLeases: [], commandJournal: [] } },
+      async load() { return { activeLeases: [], commandJournal: [], sandboxes: [] } },
       async save(state) { saved.push(structuredClone(state)) },
       async markSynchronized() {},
     },
@@ -151,7 +206,8 @@ test('the Runner persists a lease before accepting and completing it', async () 
 
   await Bun.sleep(0)
 
-  expect(saved[1].activeLeases).toEqual([{ jobId: 'job_v1_123', leaseToken: 'lease_v1_123' }])
+  expect(saved.some((savedState) => savedState.activeLeases.some((lease) => lease.jobId === 'job_v1_123'))).toBe(true)
+  expect(saved.at(-1)?.activeLeases).toEqual([])
   expect(socket.sent.slice(-3).map((message) => JSON.parse(message).type)).toEqual(['lease.accept', 'lease.heartbeat', 'lease.result'])
 })
 
