@@ -1656,12 +1656,23 @@
   line-height: 1.5;
   margin-top: 16px;
 }
+.fd-runner-summary-detail {
+  margin-top: 20px;
+}
+.fd-runner-capacity > strong {
+  color: var(--accent);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+}
 .fd-runner-details {
   min-width: 0;
   display: grid;
   gap: 18px;
 }
-.fd-runner-detail > span {
+.fd-runner-detail > span,
+.fd-runner-summary-detail > span {
   display: block;
   color: var(--muted);
   font-size: 10px;
@@ -1670,6 +1681,7 @@
 }
 .fd-runner-detail > a,
 .fd-runner-detail > strong,
+.fd-runner-summary-detail > strong,
 .fd-runner-job-list a {
   display: block;
   margin-top: 8px;
@@ -1687,6 +1699,7 @@
   text-decoration-color: currentColor;
 }
 .fd-runner-detail > small,
+.fd-runner-summary-detail > small,
 .fd-runner-job-list small,
 .fd-runner-history small {
   color: var(--muted);

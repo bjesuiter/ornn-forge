@@ -355,6 +355,17 @@ export function Dashboard({
                       Letzter Kontakt {runner.lastSeenAt ? relativeTime(runner.lastSeenAt) : 'nie'}
                       {runner.lastSeenAt && <> · {dateTime(runner.lastSeenAt)}</>}
                     </p>
+                    <section className="fd-runner-summary-detail fd-runner-capacity">
+                      <span>Kapazität</span>
+                      <strong>{runner.reservations} / {runner.desiredCapacity} Jobs</strong>
+                    </section>
+                    {runner.profile && (
+                      <section className="fd-runner-summary-detail">
+                        <span>Hardware & Umgebung</span>
+                        <strong>{runner.profile.hardwareModel}</strong>
+                        <small>{runner.profile.release} · {runner.profile.platform}/{runner.profile.architecture} · {runner.profile.runtime} · {runner.profile.executor}</small>
+                      </section>
+                    )}
                   </div>
                   <div className="fd-runner-details">
                     <section className="fd-runner-detail">
@@ -377,11 +388,6 @@ export function Dashboard({
                         </ul>
                       )}
                     </section>
-                    <section className="fd-runner-detail">
-                      <span>Kapazität</span>
-                      <strong>{runner.reservations} von {runner.desiredCapacity} reserviert</strong>
-                      <small>Reservierungen bleiben bis zur verifizierten Sandbox-Bereinigung bestehen.</small>
-                    </section>
                     {runner.fault && (
                       <section className="fd-runner-detail fd-runner-detail-fault">
                         <span>Letzter Fehler</span>
@@ -401,13 +407,6 @@ export function Dashboard({
                         </>
                       ) : <strong>Noch kein abgeschlossener Job</strong>}
                     </section>
-                    {runner.profile && (
-                      <section className="fd-runner-detail">
-                        <span>Hardware & Umgebung</span>
-                        <strong>{runner.profile.hardwareModel}</strong>
-                        <small>{runner.profile.release} · {runner.profile.platform}/{runner.profile.architecture} · {runner.profile.runtime} · {runner.profile.executor}</small>
-                      </section>
-                    )}
                     {runner.recentJobs.length > 1 && (
                       <section className="fd-runner-detail fd-runner-history">
                         <span>Letzte Jobs</span>
