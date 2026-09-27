@@ -91,6 +91,13 @@ export type JobInspection = {
     createdAt: string
   }
   events: EventRecord[]
+  leaseCheckouts: Array<{
+    runnerId: string
+    generation: number
+    repository: string
+    revision: string
+    preparedAt: string
+  }>
   message?: OrnnMessageState
   artifact?: AnalysisArtifact
   executionOutcome?: ExecutionOutcome
@@ -118,6 +125,7 @@ export interface InvocationStore {
   synchronizeRunner?(input: RunnerSynchronization): Promise<RunnerSynchronizationResult | undefined>
   acknowledgeRunnerCommand?(runnerId: string, entry: RunnerCommandJournalEntry): Promise<boolean>
   pollRunner?(runnerId: string): Promise<LeaseGrant | undefined>
+  recordLeaseCheckout?(input: LeaseInput & { repository: string; revision: string }): Promise<boolean>
   setRunnerPaused?(runnerId: string, paused: boolean): Promise<boolean>
   setRunnerLabel?(runnerId: string, label: string): Promise<boolean>
   decommissionRemoteRunner?(input: RunnerDecommission): Promise<RunnerDecommissionResult>
@@ -941,6 +949,21 @@ export function createInMemoryInvocationStore(): InvocationStore {
         },
       }
     },
+    async recordLeaseCheckout(input) {
+      const lease = await matchingLease(leasesByJob, input)
+      const inspection = inspectionsByJob.get(input.jobId)
+      if (!lease || !inspection || inspection.job.state !== 'leased'
+        || inspection.invocation.github.repository.fullName !== input.repository
+        || !/^[0-9a-f]{40}$/i.test(input.revision)) return false
+      inspection.leaseCheckouts.push({
+        runnerId: input.runnerId,
+        generation: lease.generation,
+        repository: input.repository,
+        revision: input.revision,
+        preparedAt: new Date().toISOString(),
+      })
+      return true
+    },
     async setRunnerPaused(runnerId, paused) {
       if (decommissionedRunners.has(runnerId) || !runnerCredentials.has(runnerId)) return false
       if (paused) pausedRunners.add(runnerId)
@@ -1098,6 +1121,7 @@ async function buildRecord(delivery: DeliveryInput): Promise<StoredRecord> {
         createdAt,
       },
       events: events.slice(2),
+      leaseCheckouts: [],
       message: {
         id: opaqueId('om'),
         revision: 1,
@@ -1242,6 +1266,10 @@ class D1InvocationStore implements InvocationStore {
       ORDER BY revision ASC`).bind(row.job_id).all<{
         event_id: string; event_type: string; revision: number; created_at: string
       }>()
+    const leaseCheckouts = await this.database.prepare(`SELECT runner_id, generation, repository, revision, prepared_at
+      FROM runner_lease_checkouts WHERE job_id = ? ORDER BY prepared_at, token_digest`).bind(jobId).all<{
+        runner_id: string; generation: number; repository: string; revision: string; prepared_at: string
+      }>()
     const artifact = row.artifact_json === null ? undefined : JSON.parse(row.artifact_json) as AnalysisArtifact
     const observations = await this.database.prepare(`SELECT revision, payload_json FROM domain_events WHERE stream_kind = 'job' AND stream_id = ? AND event_type = 'job.runner_observed'`).bind(jobId).all<{ revision: number; payload_json: string }>()
     const observationsByRevision = new Map(observations.results.flatMap((event) => {
@@ -1279,6 +1307,13 @@ class D1InvocationStore implements InvocationStore {
         revision: String(event.revision),
         occurredAt: event.created_at,
         ...(observationsByRevision.has(String(event.revision)) ? { observation: observationsByRevision.get(String(event.revision)) } : {}),
+      })),
+      leaseCheckouts: leaseCheckouts.results.map((checkout) => ({
+        runnerId: checkout.runner_id,
+        generation: checkout.generation,
+        repository: checkout.repository,
+        revision: checkout.revision,
+        preparedAt: checkout.prepared_at,
       })),
       message: row.message_id === null || row.message_revision === null || row.effect_key === null || row.latest_attempt === null
         ? undefined
@@ -1582,6 +1617,24 @@ class D1InvocationStore implements InvocationStore {
         comment: candidate.github_comment_body,
       },
     }
+  }
+
+  async recordLeaseCheckout(input: LeaseInput & { repository: string; revision: string }): Promise<boolean> {
+    if (!/^[0-9a-f]{40}$/i.test(input.revision)) return false
+    const now = new Date().toISOString()
+    const tokenDigest = await sha256(input.leaseToken)
+    const result = await this.database.prepare(`INSERT INTO runner_lease_checkouts (
+      job_id, runner_id, generation, token_digest, repository, revision, prepared_at
+    ) SELECT lease.job_id, lease.runner_id, lease.generation, lease.token_digest, ?, ?, ?
+      FROM runner_leases lease
+      JOIN jobs job ON job.job_id = lease.job_id
+      JOIN invocations invocation ON invocation.invocation_id = job.invocation_id
+      WHERE lease.job_id = ? AND lease.runner_id = ? AND lease.token_digest = ? AND lease.expires_at > ?
+        AND job.state = 'leased' AND job.force_quit_requested_at IS NULL
+        AND invocation.github_repository_full_name = ?`).bind(
+      input.repository, input.revision, now, input.jobId, input.runnerId, tokenDigest, now, input.repository,
+    ).run()
+    return result.meta.changes === 1
   }
 
   async setRunnerPaused(runnerId: string, paused: boolean): Promise<boolean> {

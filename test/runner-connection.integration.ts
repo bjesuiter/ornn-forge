@@ -3,7 +3,7 @@ import { env, exports } from 'cloudflare:workers'
 import { evictDurableObject } from 'cloudflare:test'
 import { envelope } from '@ornn-forge/protocol'
 import { createD1InvocationStore, type InvocationStore } from '../src/control-plane'
-import { offerNextLease } from '../src/runner-connection'
+import { offerNextLease } from '../src/lease-offer'
 
 const runnerId = 'runner_v1_abcdefghijklmnopqrstuv'
 const recoveringRunnerId = 'runner_v1_zyxwvutsrqponmlkjihgfe'
@@ -190,8 +190,9 @@ test('offers only one lease before the Runner acknowledges capacity', async () =
       return grants.shift()
     },
     async releaseLease() { return true },
+    async recordLeaseCheckout() { return true },
     async recordRunnerFault() {},
-  } satisfies Pick<InvocationStore, 'pollRunner' | 'releaseLease' | 'recordRunnerFault'>
+  } satisfies Pick<InvocationStore, 'pollRunner' | 'recordLeaseCheckout' | 'releaseLease' | 'recordRunnerFault'>
 
   await offerNextLease(
     { send(message) { messages.push(String(message)) } },
@@ -204,6 +205,40 @@ test('offers only one lease before the Runner acknowledges capacity', async () =
   expect(polls).toBe(1)
   expect(messages).toHaveLength(1)
   expect(JSON.parse(messages[0])).toMatchObject({ type: 'runner.lease', payload: { jobId: 'job_v1_first' } })
+})
+
+test('D1 pins each prepared checkout to its valid lease and keeps it after release', async () => {
+  const jobId = 'job_v1_checkout_integration'
+  const leaseToken = 'lease-checkout-integration'
+  const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(leaseToken)))]
+    .map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  const now = new Date().toISOString()
+  await env.ORNN_D1.prepare('INSERT INTO invocations (invocation_id, github_repository_full_name) VALUES (?, ?)')
+    .bind('inv_checkout', 'bjesuiter/ornn-forge').run()
+  await env.ORNN_D1.prepare("INSERT INTO jobs (job_id, state, created_at, invocation_id) VALUES (?, 'leased', ?, ?)")
+    .bind(jobId, now, 'inv_checkout').run()
+  await env.ORNN_D1.prepare('INSERT INTO runner_leases VALUES (?, ?, 1, ?, ?, ?, ?)')
+    .bind(jobId, runnerId, digest, new Date(Date.now() + 60_000).toISOString(), now, now).run()
+  const store = createD1InvocationStore(env.ORNN_D1)
+  const input = { jobId, runnerId, leaseToken, repository: 'bjesuiter/ornn-forge', revision: 'a'.repeat(40) }
+  expect(await store.recordLeaseCheckout({ ...input, leaseToken: 'wrong-token' })).toBe(false)
+  expect(await store.recordLeaseCheckout({ ...input, repository: 'other/repository' })).toBe(false)
+  expect(await store.recordLeaseCheckout(input)).toBe(true)
+  await env.ORNN_D1.prepare('DELETE FROM runner_leases WHERE job_id = ?').bind(jobId).run()
+  expect(await env.ORNN_D1.prepare('SELECT runner_id, generation, repository, revision FROM runner_lease_checkouts WHERE job_id = ?')
+    .bind(jobId).first()).toMatchObject({ runner_id: runnerId, generation: 1, repository: input.repository, revision: input.revision })
+  const nextToken = 'lease-checkout-integration-next'
+  const nextDigest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(nextToken)))]
+    .map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  await env.ORNN_D1.prepare('INSERT INTO runner_leases VALUES (?, ?, 2, ?, ?, ?, ?)')
+    .bind(jobId, runnerId, nextDigest, new Date(Date.now() + 60_000).toISOString(), now, now).run()
+  expect(await store.recordLeaseCheckout({ ...input, leaseToken: nextToken, revision: 'b'.repeat(40) })).toBe(true)
+  const history = await env.ORNN_D1.prepare('SELECT generation, revision FROM runner_lease_checkouts WHERE job_id = ? ORDER BY generation')
+    .bind(jobId).all<{ generation: number; revision: string }>()
+  expect(history.results).toEqual([
+    { generation: 1, revision: 'a'.repeat(40) },
+    { generation: 2, revision: 'b'.repeat(40) },
+  ])
 })
 
 async function connect(worker: { fetch(request: Request): Promise<Response> }, id: string): Promise<WebSocket> {
@@ -243,6 +278,7 @@ async function createControlStateSchema(): Promise<void> {
     env.ORNN_D1.prepare('CREATE TABLE runner_command_journal (runner_id TEXT, command_id TEXT, state TEXT, reported_at TEXT, PRIMARY KEY (runner_id, command_id))'),
     env.ORNN_D1.prepare('CREATE TABLE jobs (job_id TEXT PRIMARY KEY, state TEXT, cleanup_status TEXT, created_at TEXT, invocation_id TEXT, force_quit_requested_at TEXT, force_quit_completed_at TEXT, force_quit_command_id TEXT, execution_status TEXT, execution_completed_at TEXT, cleanup_updated_at TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE runner_leases (job_id TEXT PRIMARY KEY, runner_id TEXT, generation INTEGER, token_digest TEXT, expires_at TEXT, last_heartbeat_at TEXT, created_at TEXT)'),
+    env.ORNN_D1.prepare('CREATE TABLE runner_lease_checkouts (job_id TEXT, runner_id TEXT, generation INTEGER, token_digest TEXT PRIMARY KEY, repository TEXT, revision TEXT, prepared_at TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE invocations (invocation_id TEXT PRIMARY KEY, github_repository_full_name TEXT, github_issue_number INTEGER, github_issue_title TEXT, github_issue_body TEXT, github_comment_body TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE domain_events (event_id TEXT PRIMARY KEY, schema_version INTEGER, stream_kind TEXT, stream_id TEXT, revision INTEGER, event_type TEXT, payload_json TEXT, payload_sha256 TEXT, created_at TEXT)'),
   ])

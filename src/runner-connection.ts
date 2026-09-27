@@ -1,8 +1,8 @@
 import { DurableObject } from 'cloudflare:workers'
 import { envelope, isAnalysisArtifact, isRunnerCommandJournalEntry, isRunnerFault, isRunnerLeaseObservation, isRunnerSynchronization, parseRunnerEnvelope } from '@ornn-forge/protocol'
-import { createD1InvocationStore, publishJobMessage, type InvocationStore } from './control-plane'
+import { createD1InvocationStore, publishJobMessage } from './control-plane'
 import { createGitHubMessagePublisher } from './github-message-publisher'
-import { createGitHubRepositoryCheckout, type RepositoryCheckout } from './github-repository-checkout'
+import { offerNextLease } from './lease-offer'
 
 type Attachment = { runnerId: string; instanceId?: string; synchronized: boolean }
 
@@ -127,29 +127,6 @@ function attachment(socket: WebSocket): Attachment | undefined {
 function leaseInput(value: Record<string, unknown>, runnerId: string) {
   if (value.runnerId !== runnerId || typeof value.jobId !== 'string' || typeof value.leaseToken !== 'string') return undefined
   return { runnerId, jobId: value.jobId, leaseToken: value.leaseToken }
-}
-
-export async function offerNextLease(
-  socket: Pick<WebSocket, 'send'>,
-  store: Pick<InvocationStore, 'pollRunner' | 'releaseLease' | 'recordRunnerFault'>,
-  runnerId: string,
-  env: Cloudflare.Env,
-  resolveCheckout: (repository: string) => Promise<RepositoryCheckout> = createGitHubRepositoryCheckout({
-    appId: env.GITHUB_APP_ID,
-    privateKey: env.GITHUB_APP_PRIVATE_KEY,
-    installationId: env.GITHUB_APP_INSTALLATION_ID,
-    repositoryId: env.GITHUB_REPOSITORY_ID,
-  }).resolve,
-): Promise<void> {
-  const lease = await store.pollRunner?.(runnerId)
-  if (!lease) return
-  try {
-    const checkout = await resolveCheckout(lease.repository.fullName)
-    socket.send(JSON.stringify(envelope('runner.lease', { ...lease, checkout })))
-  } catch {
-    await store.releaseLease?.({ runnerId, jobId: lease.jobId, leaseToken: lease.leaseToken })
-    await store.recordRunnerFault?.(runnerId, { code: 'runner.repository_checkout_unavailable' })
-  }
 }
 
 function close(socket: WebSocket, code: number, reason: string): void { socket.close(code, reason) }
