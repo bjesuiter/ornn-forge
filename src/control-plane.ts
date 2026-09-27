@@ -2,12 +2,14 @@ import {
   envelope,
   isAnalysisArtifact,
   isRunnerFault,
+  isRunnerLeaseStage,
   isRunnerProfile,
   parseRunnerEnvelope,
   type AnalysisArtifact,
   type LeaseGrant,
   type RunnerCommandJournalEntry,
   type RunnerFault,
+  type RunnerLeaseStage,
   type RunnerSynchronization,
   type RunnerDesiredConfiguration,
   type RunnerProfile,
@@ -63,6 +65,7 @@ type EventRecord = {
   type: string
   revision: string
   occurredAt: string
+  observation?: { stage: RunnerLeaseStage; faultCode?: string }
 }
 
 export type JobInspection = {
@@ -120,6 +123,7 @@ export interface InvocationStore {
   heartbeatLease?(input: LeaseInput): Promise<boolean>
   releaseLease?(input: LeaseInput): Promise<boolean>
   completeLease?(input: LeaseInput & { artifact: AnalysisArtifact; cleanupStatus: 'verified' | 'failed' }): Promise<'accepted' | 'invalid_artifact'>
+  recordLeaseObservation?(input: LeaseInput & { stage: RunnerLeaseStage; faultCode?: string }): Promise<boolean>
   recordRunnerSuccess?(runnerId: string): Promise<void>
   recordRunnerFault?(runnerId: string, fault: RunnerFault): Promise<void>
   recordMessagePublication?(jobId: string, update: { githubCommentId?: string; attempt: OrnnMessageState['latestAttempt'] }): Promise<void>
@@ -973,6 +977,15 @@ export function createInMemoryInvocationStore(): InvocationStore {
       if (input.cleanupStatus === 'verified') leasesByJob.delete(input.jobId)
       return 'accepted'
     },
+    async recordLeaseObservation(input) {
+      const lease = await matchingLease(leasesByJob, input)
+      const inspection = inspectionsByJob.get(input.jobId)
+      if (!lease || !inspection || inspection.job.state !== 'leased') return false
+      const observation = { stage: input.stage, ...(input.faultCode ? { faultCode: input.faultCode } : {}) }
+      if (inspection.events.some((event) => event.type === 'job.runner_observed' && JSON.stringify(event.observation) === JSON.stringify(observation))) return true
+      inspection.events.push({ id: opaqueId('evt'), type: 'job.runner_observed', revision: String(inspection.events.length + 1), occurredAt: new Date().toISOString(), observation })
+      return true
+    },
     async recordRunnerSuccess() {},
     async recordRunnerFault() {},
     async recordMessagePublication(jobId, update) {
@@ -1181,6 +1194,15 @@ class D1InvocationStore implements InvocationStore {
         event_id: string; event_type: string; revision: number; created_at: string
       }>()
     const artifact = row.artifact_json === null ? undefined : JSON.parse(row.artifact_json) as AnalysisArtifact
+    const observations = await this.database.prepare(`SELECT revision, payload_json FROM domain_events WHERE stream_kind = 'job' AND stream_id = ? AND event_type = 'job.runner_observed'`).bind(jobId).all<{ revision: number; payload_json: string }>()
+    const observationsByRevision = new Map(observations.results.flatMap((event) => {
+      try {
+        const value = JSON.parse(event.payload_json) as { stage?: unknown; faultCode?: unknown }
+        return isRunnerLeaseStage(value.stage) && (value.faultCode === undefined || typeof value.faultCode === 'string')
+          ? [[String(event.revision), { stage: value.stage, ...(typeof value.faultCode === 'string' ? { faultCode: value.faultCode } : {}) }]] as const
+          : []
+      } catch { return [] }
+    }))
     return {
       invocation: {
         id: row.invocation_id,
@@ -1207,6 +1229,7 @@ class D1InvocationStore implements InvocationStore {
         type: event.event_type,
         revision: String(event.revision),
         occurredAt: event.created_at,
+        ...(observationsByRevision.has(String(event.revision)) ? { observation: observationsByRevision.get(String(event.revision)) } : {}),
       })),
       message: row.message_id === null || row.message_revision === null || row.effect_key === null || row.latest_attempt === null
         ? undefined
@@ -1588,6 +1611,24 @@ class D1InvocationStore implements InvocationStore {
     const completed = await this.database.prepare(`SELECT state FROM jobs WHERE job_id = ?`).bind(input.jobId)
       .first<{ state: string }>()
     return completed?.state === 'succeeded' ? 'accepted' : 'invalid_artifact'
+  }
+
+  async recordLeaseObservation(input: LeaseInput & { stage: RunnerLeaseStage; faultCode?: string }): Promise<boolean> {
+    const now = new Date().toISOString()
+    const tokenDigest = await sha256(input.leaseToken)
+    const valid = await this.database.prepare(`SELECT 1 FROM jobs j JOIN runner_leases l ON l.job_id = j.job_id
+      WHERE j.job_id = ? AND j.state = 'leased' AND l.runner_id = ? AND l.token_digest = ? AND l.expires_at > ?`).bind(
+      input.jobId, input.runnerId, tokenDigest, now,
+    ).first()
+    if (!valid) return false
+    const payload = canonicalJson({ stage: input.stage, ...(input.faultCode ? { faultCode: input.faultCode } : {}) })
+    const payloadSha256 = await sha256(payload)
+    const revision = await this.nextJobRevision(input.jobId)
+    const result = await this.database.prepare(`INSERT INTO domain_events (event_id, schema_version, stream_kind, stream_id, revision, event_type, payload_json, payload_sha256, created_at)
+      SELECT ?, ?, 'job', ?, ?, 'job.runner_observed', ?, ?, ? WHERE NOT EXISTS (
+        SELECT 1 FROM domain_events WHERE stream_kind = 'job' AND stream_id = ? AND event_type = 'job.runner_observed' AND payload_sha256 = ?
+      )`).bind(opaqueId('evt'), EVENT_SCHEMA_VERSION, input.jobId, revision, payload, payloadSha256, now, input.jobId, payloadSha256).run()
+    return result.meta.changes === 1 || (await this.database.prepare(`SELECT 1 FROM domain_events WHERE stream_kind = 'job' AND stream_id = ? AND event_type = 'job.runner_observed' AND payload_sha256 = ?`).bind(input.jobId, payloadSha256).first()) !== undefined
   }
 
   async recordMessagePublication(jobId: string, update: { githubCommentId?: string; attempt: OrnnMessageState['latestAttempt'] }): Promise<void> {

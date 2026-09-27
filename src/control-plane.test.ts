@@ -114,6 +114,30 @@ test('admits one signed delivery and lets the operator inspect its pending Analy
   expect(await resolved.json()).toMatchObject({ job: { id: accepted.jobId }, message: { id: inspection.message.id } })
 })
 
+test('retains a redacted Runner execution boundary for an accepted lease', async () => {
+  const store = createInMemoryInvocationStore()
+  const app = createControlPlane({
+    store, githubWebhookSecret: webhookSecret, githubInstallationId: '42', githubRepositoryId: '99', operatorBearerSecret: operatorSecret,
+  })
+  const admitted = await app.fetch(await signedWebhookRequest('delivery-observation', issueComment()))
+  const { jobId } = await admitted.json() as { jobId: string }
+  const lease = await store.pollRunner?.('runner_homeserv1')
+  expect(lease).toBeDefined()
+  expect(await store.recordLeaseObservation?.({
+    runnerId: 'runner_homeserv1', jobId, leaseToken: lease!.leaseToken, stage: 'execution_failed', faultCode: 'runner.execution_failed',
+  })).toBe(true)
+  expect(await store.recordLeaseObservation?.({
+    runnerId: 'runner_homeserv1', jobId, leaseToken: lease!.leaseToken, stage: 'execution_failed', faultCode: 'runner.execution_failed',
+  })).toBe(true)
+  expect(await store.recordLeaseObservation?.({
+    runnerId: 'runner_homeserv1', jobId, leaseToken: 'wrong', stage: 'execution_started',
+  })).toBe(false)
+  const inspection = await store.inspectJob(jobId)
+  expect(inspection?.events.filter((event) => event.type === 'job.runner_observed')).toEqual([
+    expect.objectContaining({ observation: { stage: 'execution_failed', faultCode: 'runner.execution_failed' } }),
+  ])
+})
+
 test('issues independent, short-lived, one-time Setup tokens for Remote Runner enrollment', async () => {
   let now = new Date('2026-09-06T12:00:00.000Z')
   const app = createControlPlane({

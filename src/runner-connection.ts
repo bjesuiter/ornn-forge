@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers'
-import { envelope, isAnalysisArtifact, isRunnerCommandJournalEntry, isRunnerFault, isRunnerSynchronization, parseRunnerEnvelope } from '@ornn-forge/protocol'
+import { envelope, isAnalysisArtifact, isRunnerCommandJournalEntry, isRunnerFault, isRunnerLeaseObservation, isRunnerSynchronization, parseRunnerEnvelope } from '@ornn-forge/protocol'
 import { createD1InvocationStore, publishJobMessage, type InvocationStore } from './control-plane'
 import { createGitHubMessagePublisher } from './github-message-publisher'
 import { createGitHubRepositoryCheckout, type RepositoryCheckout } from './github-repository-checkout'
@@ -77,6 +77,12 @@ export class RunnerConnection extends DurableObject<Cloudflare.Env> {
         code: isAnalysisArtifact(parsed.value.payload.artifact) ? 'lease_invalid' : 'invalid_artifact',
       })))
       if (completed === 'accepted') await offerNextLease(socket, store, state.runnerId, this.env)
+      return
+    }
+    if (parsed.value.type === 'lease.observation' && isRunnerLeaseObservation(parsed.value.payload)) {
+      const lease = leaseInput(parsed.value.payload, state.runnerId)
+      const accepted = lease && await store.recordLeaseObservation?.({ ...lease, stage: parsed.value.payload.stage, faultCode: parsed.value.payload.faultCode })
+      socket.send(JSON.stringify(envelope(accepted ? 'lease.accepted' : 'lease.rejected', accepted ? { jobId: String(parsed.value.payload.jobId) } : { code: 'lease_invalid' })))
       return
     }
     if (parsed.value.type === 'runner.report' && isRunnerFault(parsed.value.payload.fault)) {

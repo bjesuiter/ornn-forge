@@ -94,6 +94,29 @@ test('the Docker fixture executes through the SandboxDriver and verifies cleanup
   ])
 })
 
+test('the Docker fixture reports its failed creation boundary without provider details', async () => {
+  const stages: string[] = []
+  const driver: SandboxDriver = {
+    async create() { throw new Error('provider detail must not leave the Runner') },
+    async discover() { return [] },
+    async inspect() { return { state: 'absent', observedAt: '' } },
+    async exec() { throw new Error('not used') },
+    async readFile() { throw new Error('not used') },
+    async writeFile() { throw new Error('not used') },
+    async collectArtifacts() { return new Map() },
+    async terminate() {},
+    async destroy() {},
+  }
+  await expect(executeDockerFixture({
+    runnerId: 'runner_v1_abcdefghijklmnopqrstuv', image: 'busybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', driver,
+    onObserved(stage, faultCode) { stages.push(`${stage}:${faultCode ?? ''}`) },
+  }, {
+    jobId: 'job_v1_abcdefghijklmnopqrstuv', leaseToken: 'lease_v1_123', generation: 1, expiresAt: '2026-09-07T12:15:00.000Z',
+    repository: { fullName: 'bjesuiter/ornn-forge' }, workOrder: { issueNumber: 1, title: 'Fixture', body: '', comment: '@ornn' },
+  }, new AbortController().signal)).rejects.toThrow('provider detail')
+  expect(stages).toEqual(['execution_started:', 'execution_failed:runner.execution_failed'])
+})
+
 test('Runner startup removes a persisted sandbox before it accepts new work', async () => {
   const calls: string[] = []
   const sandbox: SandboxLease = {

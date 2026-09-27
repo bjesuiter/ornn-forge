@@ -19,6 +19,7 @@ export type RunnerProfile = {
 }
 
 export type RunnerFault = { code: string }
+export type RunnerLeaseStage = 'execution_started' | 'sandbox_created' | 'workspace_import_started' | 'workspace_imported' | 'fixture_executed' | 'cleanup_started' | 'cleanup_verified' | 'execution_failed'
 
 export type RunnerLeaseClaim = { jobId: string; leaseToken: string }
 export type RunnerCommandJournalEntry = { commandId: string; state: 'accepted' | 'completed' | 'failed' }
@@ -48,6 +49,7 @@ export type RunnerReport = RunnerEnvelope<'runner.report', { runnerId: string; f
 export type RunnerSynchronize = RunnerEnvelope<'runner.synchronize', RunnerSynchronization>
 export type RunnerPresenceHeartbeat = RunnerEnvelope<'runner.heartbeat', { runnerId: string; instanceId: string }>
 export type RunnerLeaseAccept = RunnerEnvelope<'lease.accept', RunnerLeaseClaim & { runnerId: string }>
+export type RunnerLeaseObservation = RunnerEnvelope<'lease.observation', RunnerLeaseClaim & { runnerId: string; stage: RunnerLeaseStage; faultCode?: string }>
 export type RunnerCommandAcknowledgement = RunnerEnvelope<'runner.command.acknowledged', {
   runnerId: string
   commandId: string
@@ -127,6 +129,15 @@ export function isRunnerProfile(value: unknown): value is RunnerProfile {
 
 export function isRunnerFault(value: unknown): value is RunnerFault {
   return isRecord(value) && isShortText(value.code)
+}
+
+export function isRunnerLeaseObservation(value: unknown): value is RunnerLeaseObservation['payload'] {
+  return isRecord(value) && isShortText(value.runnerId) && isShortText(value.jobId) && isShortText(value.leaseToken)
+    && isRunnerLeaseStage(value.stage) && (value.faultCode === undefined || isShortText(value.faultCode))
+}
+
+export function isRunnerLeaseStage(value: unknown): value is RunnerLeaseStage {
+  return typeof value === 'string' && ['execution_started', 'sandbox_created', 'workspace_import_started', 'workspace_imported', 'fixture_executed', 'cleanup_started', 'cleanup_verified', 'execution_failed'].includes(value)
 }
 
 export function isRunnerCommandJournalEntry(value: unknown): value is RunnerCommandJournalEntry {
