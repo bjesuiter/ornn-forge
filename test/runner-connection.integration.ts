@@ -21,6 +21,8 @@ test('a real RunnerConnection Durable Object takes over and resumes synchronizat
   ) VALUES (?, 'remote', 1, 'enrolled', 'not_ready', ?)`).bind(runnerId, new Date().toISOString()).run()
   await env.ORNN_D1.prepare('INSERT INTO runner_credentials (runner_id, credential_digest, created_at) VALUES (?, ?, ?)')
     .bind(runnerId, 'test-digest', new Date().toISOString()).run()
+  expect((await env.ORNN_D1.prepare('SELECT readiness_state FROM remote_runners WHERE runner_id = ?')
+    .bind(runnerId).first<{ readiness_state: string }>())?.readiness_state).toBe('not_ready')
 
   const stub = env.RUNNER_CONNECTION.getByName(runnerId)
   const first = await connect(exports.default, runnerId)
@@ -29,6 +31,8 @@ test('a real RunnerConnection Durable Object takes over and resumes synchronizat
     runnerId, instanceId: 'instance_v1_abcdefghijklmnopqrstuv', profile, activeLeases: [], commandJournal: [],
   })))
   expect((await synchronized).type).toBe('runner.synchronized')
+  expect((await env.ORNN_D1.prepare('SELECT readiness_state FROM remote_runners WHERE runner_id = ?')
+    .bind(runnerId).first<{ readiness_state: string }>())?.readiness_state).toBe('ready')
 
   await evictDurableObject(stub)
   const heartbeated = nextMessage(first)

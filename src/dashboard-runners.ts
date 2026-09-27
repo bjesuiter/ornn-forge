@@ -47,7 +47,7 @@ export type DashboardRunnerResult = {
   completedAt: string
 }
 
-const onlineWindowMs = 20_000
+const onlineWindowMs = 60_000
 
 type DashboardRunnerRow = {
   runner_id: string
@@ -148,13 +148,14 @@ export function dashboardRunnersFromRows(
   const completedJobs = groupRows(completedRows, runnerResultFromRow)
   return rows.map((runner) => {
     const recentJobs = completedJobs.get(runner.runner_id) ?? []
+    const online = runner.last_seen_at !== null && runner.last_seen_at >= onlineSince
     return {
       id: runner.runner_id,
       label: runner.label,
       enrollment: runner.enrollment_state,
-      ready: runner.readiness_state === 'ready',
+      ready: online && runner.readiness_state === 'ready',
       desiredCapacity: runner.desired_capacity,
-      online: runner.last_seen_at !== null && runner.last_seen_at >= onlineSince,
+      online,
       lastSeenAt: runner.last_seen_at ?? undefined,
       paused: runner.paused === 1,
       fault: runner.fault_code === null || runner.fault_occurred_at === null
