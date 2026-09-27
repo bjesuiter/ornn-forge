@@ -16,8 +16,8 @@
     "test": "bun test src apps packages",
     "runner:fixture": "bun run --filter @ornn-forge/runner fixture",
     "test:worker": "vitest run --config vitest.config.ts --max-workers=1 --no-isolate",
-    "test:smoke:d1": "bun run scripts/smoke-deployed-d1.ts",
-    "test:smoke:runner-setup": "bun run scripts/smoke-deployed-runner-setup.ts"
+    "test:smoke:d1": "DEV_ENV=smoke bunx varlock run -- bun run scripts/smoke-deployed-d1.ts",
+    "test:smoke:runner-setup": "DEV_ENV=smoke bunx varlock run -- bun run scripts/smoke-deployed-runner-setup.ts"
   },
   "dependencies": {
     "@ornn-forge/domain": "workspace:*",

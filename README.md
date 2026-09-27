@@ -114,8 +114,10 @@ printing a secret:
 ./scripts/sops decrypt secrets/ops.env >/dev/null
 ./scripts/sops decrypt secrets/development.env >/dev/null
 ./scripts/sops decrypt secrets/runner-debug.env >/dev/null
+./scripts/sops decrypt secrets/smoke.env >/dev/null
 DEV_ENV=development bunx varlock load >/dev/null
 DEV_ENV=ops bunx varlock load >/dev/null
+DEV_ENV=smoke bunx varlock load >/dev/null
 DEV_ENV=runner-debug bunx varlock load >/dev/null
 ```
 
@@ -156,10 +158,34 @@ After deployment, run the explicit Cloudflare-runtime admission/inspection proof
 bun run test:smoke:d1
 ```
 
-It requires the `ORNN_SMOKE_*` variables named in
-[`scripts/smoke-deployed-d1.ts`](scripts/smoke-deployed-d1.ts). The check signs a
-fresh fixture delivery, verifies that D1 admits it transactionally, and immediately
-inspects the created pending Job through the deployed Worker.
+The command loads the dedicated `smoke` Varlock profile. Its committed
+`secrets/smoke.env` file is encrypted; edit it without putting a value on a
+command line:
+
+```sh
+./scripts/sops edit secrets/smoke.env
+```
+
+Add these dotenv entries in the editor:
+
+```dotenv
+ORNN_SMOKE_BASE_URL=https://ornn-forge.bjesuiter.workers.dev
+ORNN_SMOKE_WEBHOOK_SECRET=
+ORNN_SMOKE_INSTALLATION_ID=
+ORNN_SMOKE_REPOSITORY_ID=
+ORNN_SMOKE_REPOSITORY_FULL_NAME=bjesuiter/ornn-forge
+```
+
+`ORNN_SMOKE_WEBHOOK_SECRET` is the existing Worker
+`GITHUB_WEBHOOK_SECRET`; the profile reuses `OPERATOR_BEARER_SECRET` from
+`secrets/ops.env` rather than duplicating it. The other values identify the
+deployed target. The check signs a fresh fixture delivery, verifies that D1
+admits it transactionally, and immediately inspects the created pending Job
+through the deployed Worker. The same profile also enables:
+
+```sh
+bun run test:smoke:runner-setup
+```
 
 ## Local Runner debug container
 

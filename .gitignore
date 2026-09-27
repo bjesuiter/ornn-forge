@@ -8,6 +8,7 @@ dist/
 !.env.schema
 !.env.development
 !.env.ops
+!.env.smoke
 .bun/
 .tmp/
 .DS_Store
