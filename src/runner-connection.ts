@@ -2,7 +2,7 @@ import { DurableObject } from 'cloudflare:workers'
 import { envelope, isAnalysisArtifact, isRunnerCommandJournalEntry, isRunnerFault, isRunnerSynchronization, parseRunnerEnvelope } from '@ornn-forge/protocol'
 import { createD1InvocationStore, publishJobMessage, type InvocationStore } from './control-plane'
 import { createGitHubMessagePublisher } from './github-message-publisher'
-import { createGitHubRepositoryCheckout } from './github-repository-checkout'
+import { createGitHubRepositoryCheckout, type RepositoryCheckout } from './github-repository-checkout'
 
 type Attachment = { runnerId: string; instanceId?: string; synchronized: boolean }
 
@@ -35,7 +35,7 @@ export class RunnerConnection extends DurableObject<Cloudflare.Env> {
       await store.recordRunnerSuccess?.(state.runnerId)
       socket.serializeAttachment({ runnerId: state.runnerId, instanceId: parsed.value.payload.instanceId, synchronized: true } satisfies Attachment)
       socket.send(JSON.stringify(envelope('runner.synchronized', synchronized)))
-      await offerAvailableLeases(socket, store, state.runnerId, this.env)
+      await offerNextLease(socket, store, state.runnerId, this.env)
       return
     }
     if (!state.synchronized || parsed.value.payload.runnerId !== state.runnerId) return close(socket, 1008, 'Synchronization required')
@@ -43,7 +43,7 @@ export class RunnerConnection extends DurableObject<Cloudflare.Env> {
       await store.recordRunnerHeartbeat?.(state.runnerId)
       await store.recordRunnerSuccess?.(state.runnerId)
       socket.send(JSON.stringify(envelope('runner.heartbeat.accepted', {})))
-      await offerAvailableLeases(socket, store, state.runnerId, this.env)
+      await offerNextLease(socket, store, state.runnerId, this.env)
       return
     }
     if (parsed.value.type === 'lease.heartbeat') {
@@ -58,6 +58,7 @@ export class RunnerConnection extends DurableObject<Cloudflare.Env> {
       const accepted = lease && await store.heartbeatLease?.(lease)
       if (accepted) await store.recordRunnerSuccess?.(state.runnerId)
       socket.send(JSON.stringify(envelope(accepted ? 'lease.accepted' : 'lease.rejected', accepted ? { jobId: lease.jobId } : { code: 'lease_invalid' })))
+      if (accepted) await offerNextLease(socket, store, state.runnerId, this.env)
       return
     }
     if (parsed.value.type === 'lease.result') {
@@ -75,7 +76,7 @@ export class RunnerConnection extends DurableObject<Cloudflare.Env> {
       socket.send(JSON.stringify(envelope(completed === 'accepted' && lease ? 'lease.accepted' : 'lease.rejected', completed === 'accepted' && lease ? { jobId: lease.jobId } : {
         code: isAnalysisArtifact(parsed.value.payload.artifact) ? 'lease_invalid' : 'invalid_artifact',
       })))
-      if (completed === 'accepted') await offerAvailableLeases(socket, store, state.runnerId, this.env)
+      if (completed === 'accepted') await offerNextLease(socket, store, state.runnerId, this.env)
       return
     }
     if (parsed.value.type === 'runner.report' && isRunnerFault(parsed.value.payload.fault)) {
@@ -104,23 +105,26 @@ function leaseInput(value: Record<string, unknown>, runnerId: string) {
   return { runnerId, jobId: value.jobId, leaseToken: value.leaseToken }
 }
 
-async function offerAvailableLeases(socket: WebSocket, store: InvocationStore, runnerId: string, env: Cloudflare.Env): Promise<void> {
-  for (let remaining = 32; remaining > 0; remaining -= 1) {
-    const lease = await store.pollRunner?.(runnerId)
-    if (!lease) return
-    try {
-      const checkout = await createGitHubRepositoryCheckout({
-        appId: env.GITHUB_APP_ID,
-        privateKey: env.GITHUB_APP_PRIVATE_KEY,
-        installationId: env.GITHUB_APP_INSTALLATION_ID,
-        repositoryId: env.GITHUB_REPOSITORY_ID,
-      }).resolve(lease.repository.fullName)
-      socket.send(JSON.stringify(envelope('runner.lease', { ...lease, checkout })))
-    } catch {
-      await store.releaseLease?.({ runnerId, jobId: lease.jobId, leaseToken: lease.leaseToken })
-      await store.recordRunnerFault?.(runnerId, { code: 'runner.repository_checkout_unavailable' })
-      return
-    }
+export async function offerNextLease(
+  socket: Pick<WebSocket, 'send'>,
+  store: Pick<InvocationStore, 'pollRunner' | 'releaseLease' | 'recordRunnerFault'>,
+  runnerId: string,
+  env: Cloudflare.Env,
+  resolveCheckout: (repository: string) => Promise<RepositoryCheckout> = createGitHubRepositoryCheckout({
+    appId: env.GITHUB_APP_ID,
+    privateKey: env.GITHUB_APP_PRIVATE_KEY,
+    installationId: env.GITHUB_APP_INSTALLATION_ID,
+    repositoryId: env.GITHUB_REPOSITORY_ID,
+  }).resolve,
+): Promise<void> {
+  const lease = await store.pollRunner?.(runnerId)
+  if (!lease) return
+  try {
+    const checkout = await resolveCheckout(lease.repository.fullName)
+    socket.send(JSON.stringify(envelope('runner.lease', { ...lease, checkout })))
+  } catch {
+    await store.releaseLease?.({ runnerId, jobId: lease.jobId, leaseToken: lease.leaseToken })
+    await store.recordRunnerFault?.(runnerId, { code: 'runner.repository_checkout_unavailable' })
   }
 }
 

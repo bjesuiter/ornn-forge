@@ -1,0 +1,33 @@
+[Unit]
+Description=Ornn Forge Remote Runner
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=5min
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ornn-forge
+Group=ornn-forge
+WorkingDirectory=/home/ornn-forge/ornn-forge
+EnvironmentFile=/etc/ornn-forge/runner.env
+Environment=ORNN_RUNNER_CREDENTIAL_FILE=%d/ornn-runner.transport-credential
+LoadCredentialEncrypted=ornn-runner.transport-credential
+ExecStart=/opt/ornn-forge/bun/bin/bun run apps/runner/src/main.ts
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=45s
+KillMode=control-group
+SendSIGKILL=yes
+StateDirectory=ornn-runner
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

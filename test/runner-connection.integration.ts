@@ -2,7 +2,8 @@ import { expect, test } from 'vitest'
 import { env, exports } from 'cloudflare:workers'
 import { evictDurableObject } from 'cloudflare:test'
 import { envelope } from '@ornn-forge/protocol'
-import { createD1InvocationStore } from '../src/control-plane'
+import { createD1InvocationStore, type InvocationStore } from '../src/control-plane'
+import { offerNextLease } from '../src/runner-connection'
 
 const runnerId = 'runner_v1_abcdefghijklmnopqrstuv'
 const recoveringRunnerId = 'runner_v1_zyxwvutsrqponmlkjihgfe'
@@ -90,6 +91,32 @@ test('a force-decommissioned Runner cannot synchronize again or receive a new le
   expect((await closed).code).toBe(1008)
 })
 
+test('offers only one lease before the Runner acknowledges capacity', async () => {
+  const messages: string[] = []
+  const grants = [lease('job_v1_first'), lease('job_v1_second')]
+  let polls = 0
+  const store = {
+    async pollRunner() {
+      polls += 1
+      return grants.shift()
+    },
+    async releaseLease() { return true },
+    async recordRunnerFault() {},
+  } satisfies Pick<InvocationStore, 'pollRunner' | 'releaseLease' | 'recordRunnerFault'>
+
+  await offerNextLease(
+    { send(message) { messages.push(String(message)) } },
+    store,
+    runnerId,
+    { GITHUB_APP_ID: '1', GITHUB_APP_PRIVATE_KEY: 'unused', GITHUB_APP_INSTALLATION_ID: '2', GITHUB_REPOSITORY_ID: '3' } as Cloudflare.Env,
+    async (repository) => ({ repository, revision: 'a'.repeat(40), archiveUrl: 'https://example.test/archive', token: 'read-token', expiresAt: '2026-09-08T10:00:00.000Z' }),
+  )
+
+  expect(polls).toBe(1)
+  expect(messages).toHaveLength(1)
+  expect(JSON.parse(messages[0])).toMatchObject({ type: 'runner.lease', payload: { jobId: 'job_v1_first' } })
+})
+
 async function connect(worker: { fetch(request: Request): Promise<Response> }, id: string): Promise<WebSocket> {
   const response = await worker.fetch(new Request('https://runner.test/connect', {
     headers: { upgrade: 'websocket', 'x-ornn-runner-id': id },
@@ -102,6 +129,17 @@ async function connect(worker: { fetch(request: Request): Promise<Response> }, i
 
 async function nextMessage(socket: WebSocket): Promise<{ type: string }> {
   return new Promise((resolve) => socket.addEventListener('message', (event) => resolve(JSON.parse(String(event.data)))))
+}
+
+function lease(jobId: string) {
+  return {
+    jobId,
+    leaseToken: `lease_v1_${jobId}`,
+    generation: 1,
+    expiresAt: '2026-09-08T10:00:00.000Z',
+    repository: { fullName: 'bjesuiter/ornn-forge' },
+    workOrder: { issueNumber: 1, title: 'Fixture', body: '', comment: '' },
+  }
 }
 
 async function createControlStateSchema(): Promise<void> {

@@ -22,4 +22,4 @@ Before proposing a test, identify the nontrivial Ornn-owned behavior it protects
 
 ### Deploy fallback
 
-When a deployment is blocked because Varlock cannot resolve an interactive prompt, assume the user may be away. Use `ssh root.homeserv1` to test directly; this access is currently authorized.
+When a deployment is blocked because Varlock cannot resolve an interactive prompt, assume the user may be away. Use `ssh root.homeserv1` to test directly; this access is currently authorized. SSH may require the user's Bitwarden-provided key to be approved in this environment. If SSH cannot connect, fail fast and report it; do not attempt workarounds.
