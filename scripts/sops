@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+command -v sops >/dev/null || { echo 'sops is required' >&2; exit 69; }
+
+if ! command -v age-plugin-sshagent >/dev/null && command -v go >/dev/null; then
+  go_path=$(go env GOPATH)
+  if [ -x "$go_path/bin/age-plugin-sshagent" ]; then
+    PATH="$go_path/bin:$PATH"
+    export PATH
+  fi
+fi
+
+command -v age-plugin-sshagent >/dev/null || { echo 'age-plugin-sshagent is required' >&2; exit 69; }
+exec sops "$@"

@@ -8,8 +8,8 @@ const runner = await enrollRemoteRunner({
   controlPlaneUrl,
   setupToken,
   persistCredential: async ({ runnerId, credential }) => {
-    await storeCredentialInKeychain(credential)
-    await writeRunnerId(runnerId)
+    await storeCredentialInSops(credential)
+    await writeRunnerConfig(runnerId, controlPlaneUrl)
   },
 })
 await startDebugRunnerUntilSynchronized({ start: startDebugRunner, synchronized: hasSynchronizedControlConnection })
@@ -27,24 +27,27 @@ async function hasSynchronizedControlConnection(): Promise<boolean> {
   return await process.exited === 0
 }
 
-async function storeCredentialInKeychain(credential: string): Promise<void> {
+async function storeCredentialInSops(credential: string): Promise<void> {
   const process = Bun.spawn([
-    'bunx', 'varlock', 'keychain', 'set', 'ORNN_RUNNER_CREDENTIAL',
-    '--project', 'ornn-forge', '--profile', 'runner-debug', '--write-to', '.env.runner-debug', '--force',
+    './scripts/sops', 'set', '--value-stdin', 'secrets/runner-debug.env', '["ORNN_RUNNER_CREDENTIAL"]',
   ], { stdin: 'pipe', stdout: 'inherit', stderr: 'inherit' })
   process.stdin.write(`${credential}\n`)
   process.stdin.end()
-  if (await process.exited !== 0) throw new Error('Could not store the Runner credential in Varlock Keychain')
+  if (await process.exited !== 0) throw new Error('Could not store the Runner credential in SOPS')
 }
 
-async function writeRunnerId(runnerId: string): Promise<void> {
+async function writeRunnerConfig(runnerId: string, controlPlaneUrl: string): Promise<void> {
   const path = '.env.runner-debug'
   const current = await Bun.file(path).text().catch(() => '')
-  const line = `ORNN_RUNNER_ID=${runnerId}`
-  const next = /^ORNN_RUNNER_ID=.*$/m.test(current)
-    ? current.replace(/^ORNN_RUNNER_ID=.*$/m, line)
-    : `${current.trimEnd()}\n${line}\n`
+  const next = setConfigValue(setConfigValue(current, 'ORNN_CONTROL_PLANE_URL', controlPlaneUrl), 'ORNN_RUNNER_ID', runnerId)
   await Bun.write(path, next)
+}
+
+function setConfigValue(current: string, key: string, value: string): string {
+  const line = `${key}=${value}`
+  return new RegExp(`^${key}=.*$`, 'm').test(current)
+    ? current.replace(new RegExp(`^${key}=.*$`, 'm'), line)
+    : `${current.trimEnd()}\n${line}\n`
 }
 
 async function readSecret(prompt: string): Promise<string> {

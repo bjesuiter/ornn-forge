@@ -10,22 +10,17 @@ and its installation must grant **Issues: Read and write** repository access.
 
 ## Local Dashboard login
 
-The development profile keeps the Dashboard's OAuth secrets in macOS Keychain,
-with portable resolver references committed in [`.env.development`](.env.development).
+The development profile reads the Dashboard's OAuth secrets from the
+SOPS-encrypted [`secrets/development.env`](secrets/development.env) file.
 Configure a second callback URL on the GitHub App:
 
 ```
 http://localhost:3000/api/auth/callback/github
 ```
 
-Then set the two local secrets interactively; neither command prints the value:
-
-```sh
-bunx varlock keychain set BETTER_AUTH_SECRET --project ornn-forge --profile development --write-to .env.development
-bunx varlock keychain set GITHUB_CLIENT_SECRET --project ornn-forge --profile development --write-to .env.development
-```
-
-Generate a unique value for `BETTER_AUTH_SECRET` with `openssl rand -base64 32 | tr '+/' '-_' | tr -d '='`, then paste it into the first prompt. Paste the second GitHub App client secret into the second prompt. Start the local Dashboard with:
+Update either value through `./scripts/sops edit secrets/development.env`.
+Generate a unique value for `BETTER_AUTH_SECRET` with `openssl rand -base64 32
+| tr '+/' '-_' | tr -d '='`, then start the local Dashboard with:
 
 ```sh
 bun run dev
@@ -95,7 +90,7 @@ API token from the `ops` Varlock profile, which reads
 
 ## Operational secrets
 
-`secrets/ops.env` is a committed SOPS dotenv ciphertext. Its recipient is an
+`secrets/*.env` files are committed SOPS dotenv ciphertexts. Their recipient is an
 `age-plugin-sshagent` identity derived from the `bjesuiter@bitwarden` Ed25519
 key in Bitwarden's SSH agent. The local identity at
 `~/Library/Application Support/sops/age/keys.txt` has no private key; it
@@ -116,8 +111,12 @@ Keep `SSH_AUTH_SOCK` pointed at Bitwarden's agent. Verify the setup without
 printing a secret:
 
 ```sh
-PATH="$(go env GOPATH)/bin:$PATH" sops --decrypt secrets/ops.env >/dev/null
+./scripts/sops decrypt secrets/ops.env >/dev/null
+./scripts/sops decrypt secrets/development.env >/dev/null
+./scripts/sops decrypt secrets/runner-debug.env >/dev/null
+DEV_ENV=development bunx varlock load >/dev/null
 DEV_ENV=ops bunx varlock load >/dev/null
+DEV_ENV=runner-debug bunx varlock load >/dev/null
 ```
 
 Do not forward this SSH agent to an untrusted host: any process that can request
@@ -175,10 +174,10 @@ bun run runner:setup
 
 Setup prompts without echoing the token, preflights it before creating a
 credential, then sends only the credential's SHA-256 digest to the Control
-Plane. It stores the raw credential in macOS Keychain through Varlock and writes
-the public Runner ID to [`.env.runner-debug`](.env.runner-debug); neither is
-written to shell history. It then starts the debug Runner and reports success only
-after its authenticated control connection synchronizes.
+Plane. It stores the raw credential in `secrets/runner-debug.env` and writes the
+public control URL and Runner ID to [`.env.runner-debug`](.env.runner-debug);
+neither is written to shell history. It then starts the debug Runner and reports
+success only after its authenticated control connection synchronizes.
 The deployed control-plane and Runner setup handshake can be smoke-tested with
 `bun run test:smoke:runner-setup` after loading the `ORNN_SMOKE_*` environment.
 
