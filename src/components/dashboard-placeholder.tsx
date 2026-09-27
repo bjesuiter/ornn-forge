@@ -370,9 +370,9 @@ export function Dashboard({
                           <span aria-hidden="true" />
                           {runner.online ? 'Online' : 'Offline'}
                         </p>
-                        <span className={`fd-runner-enrollment is-${runner.enrollment}`}>
-                          {runner.enrollment === 'awaiting_setup' ? 'Einrichtung ausstehend' : 'Eingeschrieben'}
-                        </span>
+                        {runner.enrollment === 'awaiting_setup' && (
+                          <span className="fd-runner-enrollment">Einrichtung ausstehend</span>
+                        )}
                         <span className={`fd-runner-readiness ${runner.ready ? 'is-ready' : 'is-not-ready'}`}>
                           {runner.ready ? 'Bereit' : 'Nicht bereit'}
                         </span>
