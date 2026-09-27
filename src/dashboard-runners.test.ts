@@ -97,9 +97,12 @@ test('the dashboard query keeps enrollment, readiness, and presence separate', a
   database.run(`INSERT INTO remote_runners (runner_id, kind, desired_capacity, enrollment_state, readiness_state, created_at) VALUES
     ('runner_awaiting', 'remote', 2, 'awaiting_setup', 'not_ready', '2026-09-06T12:00:00.000Z'),
     ('runner_enrolled', 'remote', 3, 'enrolled', 'ready', '2026-09-06T12:00:00.000Z'),
+    ('runner_stale', 'remote', 1, 'enrolled', 'ready', '2026-09-06T12:00:00.000Z'),
     ('runner_decommissioned', 'remote', 1, 'enrolled', 'ready', '2026-09-06T12:00:00.000Z')`)
   database.run("INSERT INTO runner_credentials VALUES ('runner_enrolled', 'digest-only', '2026-09-06T12:00:00.000Z')")
+  database.run("INSERT INTO runner_credentials VALUES ('runner_stale', 'stale-digest', '2026-09-06T12:00:00.000Z')")
   database.run("INSERT INTO runner_presence VALUES ('runner_enrolled', '2026-09-06T12:00:00.000Z')")
+  database.run("INSERT INTO runner_presence VALUES ('runner_stale', '2026-09-06T11:58:00.000Z')")
   database.run("UPDATE remote_runners SET decommissioned_at = '2026-09-06T12:01:00.000Z', decommission_mode = 'normal' WHERE runner_id = 'runner_decommissioned'")
 
   const runners = await listDashboardRunners(sqliteDashboardDatabase(database), new Date('2026-09-06T12:00:05.000Z'))
@@ -107,7 +110,10 @@ test('the dashboard query keeps enrollment, readiness, and presence separate', a
   expect(runners.map(({ id, label, enrollment, ready, online, desiredCapacity }) => ({ id, label, enrollment, ready, online, desiredCapacity }))).toEqual([
     { id: 'runner_awaiting', label: 'Unbenannt', enrollment: 'awaiting_setup', ready: false, online: false, desiredCapacity: 2 },
     { id: 'runner_enrolled', label: 'Unbenannt', enrollment: 'enrolled', ready: true, online: true, desiredCapacity: 3 },
+    { id: 'runner_stale', label: 'Unbenannt', enrollment: 'enrolled', ready: false, online: false, desiredCapacity: 1 },
   ])
+  const betweenHeartbeats = await listDashboardRunners(sqliteDashboardDatabase(database), new Date('2026-09-06T12:00:24.000Z'))
+  expect(betweenHeartbeats.find((runner) => runner.id === 'runner_enrolled')).toMatchObject({ ready: true, online: true })
 })
 
 function sqliteDashboardDatabase(database: Database): DashboardRunnerDatabase {

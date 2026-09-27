@@ -882,6 +882,9 @@ export function createInMemoryInvocationStore(): InvocationStore {
         jobId: lease.jobId,
         accepted: (await matchingLease(leasesByJob, { runnerId: input.runnerId, ...lease })) !== undefined,
       })))
+      const runner = remoteRunners.get(input.runnerId)
+      if (runner) runner.ready = true
+      runnerPresence.set(input.runnerId, new Date().toISOString())
       return {
         desiredConfiguration: {
           paused: pausedRunners.has(input.runnerId),
@@ -1362,6 +1365,12 @@ class D1InvocationStore implements InvocationStore {
       LEFT JOIN runner_command_journal journal ON journal.runner_id = command.runner_id AND journal.command_id = command.command_id
       WHERE command.runner_id = ? AND journal.state IS NULL
       ORDER BY command.created_at ASC`).bind(input.runnerId).all<{ command_id: string; command_type: string; payload_json: string }>()
+    await this.database.batch([
+      this.database.prepare(`UPDATE remote_runners SET readiness_state = 'ready'
+        WHERE runner_id = ? AND enrollment_state = 'enrolled' AND decommissioned_at IS NULL`).bind(input.runnerId),
+      this.database.prepare(`INSERT INTO runner_presence (runner_id, last_seen_at)
+        VALUES (?, ?) ON CONFLICT(runner_id) DO UPDATE SET last_seen_at = excluded.last_seen_at`).bind(input.runnerId, now),
+    ])
     return {
       desiredConfiguration: { paused: pause?.paused === 1, capacity: runner.desiredCapacity },
       activeLeases,
