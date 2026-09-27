@@ -90,7 +90,38 @@ bun run deploy
 
 The deploy script builds the Worker, applies every pending remote D1 migration,
 then deploys while preserving Dashboard-set variables. It loads the Cloudflare
-API token from the `ops` Varlock profile.
+API token from the `ops` Varlock profile, which reads
+[`secrets/ops.env`](secrets/ops.env) through SOPS.
+
+## Operational secrets
+
+`secrets/ops.env` is a committed SOPS dotenv ciphertext. Its recipient is an
+`age-plugin-sshagent` identity derived from the `bjesuiter@bitwarden` Ed25519
+key in Bitwarden's SSH agent. The local identity at
+`~/Library/Application Support/sops/age/keys.txt` has no private key; it
+names the SSH-agent key and a derivation salt.
+
+Bootstrap a new macOS machine once:
+
+```sh
+brew install sops age
+go install github.com/eszio/age-plugin-sshagent@v0.1.1
+"$(go env GOPATH)/bin/age-plugin-sshagent" list
+age-plugin-sshagent keygen -k '<Bitwarden key fingerprint>' \
+  -o "$HOME/Library/Application Support/sops/age/keys.txt"
+chmod 600 "$HOME/Library/Application Support/sops/age/keys.txt"
+```
+
+Keep `SSH_AUTH_SOCK` pointed at Bitwarden's agent. Verify the setup without
+printing a secret:
+
+```sh
+PATH="$(go env GOPATH)/bin:$PATH" sops --decrypt secrets/ops.env >/dev/null
+DEV_ENV=ops bunx varlock load >/dev/null
+```
+
+Do not forward this SSH agent to an untrusted host: any process that can request
+a signature can decrypt this file.
 
 Set `ORNN_RUNNER_CREDENTIAL_ID` as a non-secret Worker variable and provision the
 same 256-bit `ORNN_RUNNER_CREDENTIAL_SECRET` only to the `homeserv1` Runner. The

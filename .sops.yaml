@@ -1,0 +1,3 @@
+creation_rules:
+  - path_regex: ^secrets/ops\.env$
+    age: age1y8m9t9r42murt8c98pg6hqhmu87egnn3jn74ppnmlnccv9tzdufqzlkxfg
