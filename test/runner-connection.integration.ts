@@ -68,6 +68,45 @@ test('a fresh Runner connection recovers D1-authoritative configuration and comm
   socket.close(1000, 'test complete')
 })
 
+test('D1 skips verified lease history but keeps failed cleanup reserved when offering the oldest job', async () => {
+  const availableRunnerId = 'runner_v1_available00000000000'
+  const blockedRunnerId = 'runner_v1_blocked000000000000'
+  const now = new Date().toISOString()
+  for (const id of [availableRunnerId, blockedRunnerId]) {
+    await env.ORNN_D1.prepare(`INSERT INTO remote_runners (
+      runner_id, kind, desired_capacity, enrollment_state, readiness_state, created_at
+    ) VALUES (?, 'remote', 1, 'enrolled', 'ready', ?)`).bind(id, now).run()
+    await env.ORNN_D1.prepare('INSERT INTO runner_credentials (runner_id, credential_digest, created_at) VALUES (?, ?, ?)')
+      .bind(id, 'test-digest', now).run()
+  }
+  for (const [jobId, runner, cleanup] of [
+    ['job_v1_old_verified', availableRunnerId, 'verified'],
+    ['job_v1_old_failed', blockedRunnerId, 'failed'],
+  ] as const) {
+    await env.ORNN_D1.prepare('INSERT INTO jobs (job_id, state, cleanup_status, created_at) VALUES (?, ?, ?, ?)')
+      .bind(jobId, 'succeeded', cleanup, now).run()
+    await env.ORNN_D1.prepare('INSERT INTO runner_leases VALUES (?, ?, 1, ?, ?, ?, ?)')
+      .bind(jobId, runner, `digest-${jobId}`, now, now, now).run()
+  }
+  for (const [jobId, createdAt] of [
+    ['job_v1_oldest_pending', '2026-09-01T00:00:00.000Z'],
+    ['job_v1_newer_pending', '2026-09-02T00:00:00.000Z'],
+  ] as const) {
+    const invocationId = `inv_${jobId}`
+    await env.ORNN_D1.prepare(`INSERT INTO invocations (
+      invocation_id, github_repository_full_name, github_issue_number, github_issue_title, github_issue_body, github_comment_body
+    ) VALUES (?, 'bjesuiter/ornn-forge', 1, 'Test', '', '')`).bind(invocationId).run()
+    await env.ORNN_D1.prepare('INSERT INTO jobs (job_id, state, created_at, invocation_id) VALUES (?, ?, ?, ?)')
+      .bind(jobId, 'pending', createdAt, invocationId).run()
+  }
+
+  const store = createD1InvocationStore(env.ORNN_D1)
+  expect(await store.pollRunner(blockedRunnerId)).toBeUndefined()
+  expect((await store.pollRunner(availableRunnerId))?.jobId).toBe('job_v1_oldest_pending')
+  expect(await env.ORNN_D1.prepare("SELECT state FROM jobs WHERE job_id = 'job_v1_newer_pending'").first())
+    .toEqual({ state: 'pending' })
+})
+
 test('D1 persists Force Quit and delivers it through the Runner connection', async () => {
   const now = new Date().toISOString()
   const jobId = 'job_v1_forcequit_integration'
@@ -206,5 +245,10 @@ async function createControlStateSchema(): Promise<void> {
     env.ORNN_D1.prepare('CREATE TABLE runner_leases (job_id TEXT PRIMARY KEY, runner_id TEXT, generation INTEGER, token_digest TEXT, expires_at TEXT, last_heartbeat_at TEXT, created_at TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE invocations (invocation_id TEXT PRIMARY KEY, github_repository_full_name TEXT, github_issue_number INTEGER, github_issue_title TEXT, github_issue_body TEXT, github_comment_body TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE domain_events (event_id TEXT PRIMARY KEY, schema_version INTEGER, stream_kind TEXT, stream_id TEXT, revision INTEGER, event_type TEXT, payload_json TEXT, payload_sha256 TEXT, created_at TEXT)'),
+  ])
+  await env.ORNN_D1.batch([
+    env.ORNN_D1.prepare("CREATE INDEX jobs_pending_oldest ON jobs (created_at, job_id) WHERE state = 'pending'"),
+    env.ORNN_D1.prepare("CREATE INDEX jobs_unverified_reservation ON jobs (job_id) WHERE cleanup_status IS NOT 'verified'"),
+    env.ORNN_D1.prepare('CREATE INDEX jobs_outstanding_command ON jobs (force_quit_command_id) WHERE force_quit_requested_at IS NOT NULL AND force_quit_completed_at IS NULL'),
   ])
 }

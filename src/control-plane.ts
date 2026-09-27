@@ -1468,9 +1468,9 @@ class D1InvocationStore implements InvocationStore {
   }
 
   async pendingRunnerCommands(runnerId: string): Promise<Array<{ commandId: string; type: string; payload: Record<string, unknown> }>> {
-    const rows = await this.database.prepare(`SELECT c.command_id, c.command_type, c.payload_json FROM runner_commands c
-      JOIN jobs j ON j.force_quit_command_id = c.command_id
-      WHERE c.runner_id = ? AND j.force_quit_requested_at IS NOT NULL AND j.force_quit_completed_at IS NULL
+    const rows = await this.database.prepare(`SELECT c.command_id, c.command_type, c.payload_json FROM jobs j
+      INDEXED BY jobs_outstanding_command JOIN runner_commands c ON c.command_id = j.force_quit_command_id
+      WHERE j.force_quit_requested_at IS NOT NULL AND j.force_quit_completed_at IS NULL AND c.runner_id = ?
       ORDER BY c.created_at`).bind(runnerId).all<{ command_id: string; command_type: string; payload_json: string }>()
     return rows.results.map((row) => ({ commandId: row.command_id, type: row.command_type, payload: JSON.parse(row.payload_json) as Record<string, unknown> }))
   }
@@ -1529,8 +1529,8 @@ class D1InvocationStore implements InvocationStore {
   async pollRunner(runnerId: string): Promise<LeaseGrant | undefined> {
     const runner = await this.remoteRunner(runnerId)
     if (!runner || runner.enrollment !== 'enrolled') return undefined
-    const reservations = await this.database.prepare(`SELECT COUNT(*) AS count FROM runner_leases l
-      JOIN jobs j ON j.job_id = l.job_id WHERE l.runner_id = ? AND j.cleanup_status IS NOT 'verified'`).bind(runnerId)
+    const reservations = await this.database.prepare(`SELECT COUNT(*) AS count FROM jobs j INDEXED BY jobs_unverified_reservation
+      JOIN runner_leases l ON l.job_id = j.job_id WHERE j.cleanup_status IS NOT 'verified' AND l.runner_id = ?`).bind(runnerId)
       .first<{ count: number }>()
     if ((reservations?.count ?? 0) >= runner.desiredCapacity) return undefined
     const candidate = await this.database.prepare(`SELECT j.job_id, i.github_repository_full_name, i.github_issue_number, i.github_issue_title,
@@ -1552,8 +1552,9 @@ class D1InvocationStore implements InvocationStore {
         SELECT ?, ?, 1, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'pending')
         AND NOT EXISTS (SELECT 1 FROM runner_pauses WHERE runner_id = ? AND paused = 1)
         AND EXISTS (SELECT 1 FROM remote_runners WHERE runner_id = ? AND enrollment_state = 'enrolled' AND decommissioned_at IS NULL)
-        AND (SELECT COUNT(*) FROM runner_leases l JOIN jobs j ON j.job_id = l.job_id
-          WHERE l.runner_id = ? AND j.cleanup_status IS NOT 'verified') <
+        AND (SELECT COUNT(*) FROM jobs j INDEXED BY jobs_unverified_reservation
+          JOIN runner_leases l ON l.job_id = j.job_id
+          WHERE j.cleanup_status IS NOT 'verified' AND l.runner_id = ?) <
           (SELECT desired_capacity FROM remote_runners WHERE runner_id = ? AND decommissioned_at IS NULL)`).bind(
         candidate.job_id, runnerId, tokenDigest, expiresAt, now, now, candidate.job_id, runnerId, runnerId, runnerId, runnerId,
       ),
