@@ -4,6 +4,8 @@ import {
   type LeaseGrant,
   type RunnerCommandJournalEntry,
   type RunnerLeaseClaim,
+  type RunnerLeaseStage,
+  type RunnerForceQuitCommand,
   type RunnerProfile,
 } from '@ornn-forge/protocol'
 import { readFile, unlink } from 'node:fs/promises'
@@ -43,8 +45,9 @@ export type ControlSocket = {
 export type WebSocketFactory = (url: string, headers: Record<string, string>) => ControlSocket
 
 type Sleep = (milliseconds: number) => Promise<void>
-type SandboxLifecycle = { created(sandbox: SandboxLease): Promise<void>; cleaned(sandbox: SandboxLease): Promise<void> }
+type SandboxLifecycle = { created(sandbox: SandboxLease): Promise<void>; cleaned(sandbox: SandboxLease): Promise<void>; observed(stage: RunnerLeaseStage, faultCode?: string): void }
 export type LeaseExecutor = (lease: LeaseGrant, signal: AbortSignal, lifecycle: SandboxLifecycle) => Promise<{ artifact: ReturnType<typeof fixtureArtifact>; cleanupStatus: 'verified' | 'failed' }>
+type ActiveExecution = { controller: AbortController; finished: Promise<void> }
 
 export async function remoteRunnerConfigFromEnvironment(
   environment: Record<string, string | undefined> = process.env,
@@ -123,6 +126,7 @@ export async function runRemoteRunner(
     onSynchronized?: () => void
     executeLease?: LeaseExecutor
     reconcileSandboxes?: (state: RunnerControlState) => Promise<void>
+    forceQuitDriver?: () => SandboxDriver
   } = {},
 ): Promise<void> {
   const stateStore = options.stateStore ?? fileRunnerStateStore()
@@ -140,7 +144,7 @@ export async function runRemoteRunner(
       } finally {
         await stateStore.save(state)
       }
-      const connection = await openControlConnection(config, state, stateStore, createSocket, options.onSynchronized, options.executeLease ?? defaultLeaseExecutor(config))
+      const connection = await openControlConnection(config, state, stateStore, createSocket, options.onSynchronized, options.executeLease ?? defaultLeaseExecutor(config), options.forceQuitDriver ?? (() => createDockerSandboxDriver({ gateway: createDockerCliGateway() })))
       attempt = 0
       await connection.closed
     } catch {
@@ -157,7 +161,7 @@ function defaultLeaseExecutor(config: RemoteRunnerConfig): LeaseExecutor {
   const importWorkspace = createRepositoryWorkspaceImporter()
   return (lease, signal, lifecycle) => executeDockerFixture({
     runnerId: config.runnerId, image: config.sandboxImage as string, driver, importWorkspace,
-    onSandboxCreated: lifecycle.created, onSandboxCleaned: lifecycle.cleaned,
+    onSandboxCreated: lifecycle.created, onSandboxCleaned: lifecycle.cleaned, onObserved: lifecycle.observed,
   }, lease, signal)
 }
 
@@ -180,12 +184,16 @@ async function openControlConnection(
   createSocket: WebSocketFactory,
   onSynchronized: (() => void) | undefined,
   executeLease: LeaseExecutor,
+  forceQuitDriver: () => SandboxDriver,
 ): Promise<{ closed: Promise<void> }> {
   const socket = createSocket(controlSocketUrl(config.controlPlaneUrl), {
     authorization: `Bearer ${config.credential}`,
     'x-ornn-runner-id': config.runnerId,
   })
   const instanceId = opaqueInstanceId()
+  const active = new Map<string, ActiveExecution>()
+  const forceQuitJobs = new Set<string>()
+  const runningCommands = new Set<string>()
   let synchronized = false
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined
   let resolveClosed: () => void = () => {}
@@ -207,7 +215,7 @@ async function openControlConnection(
     })))
   })
   socket.addEventListener('message', (event) => {
-    void handleControlMessage(event.data, { config, socket, state, stateStore, executeLease, markSynchronized: async () => {
+    void handleControlMessage(event.data, { config, socket, state, stateStore, executeLease, forceQuitDriver, active, forceQuitJobs, runningCommands, markSynchronized: async () => {
       synchronized = true
       await stateStore.markSynchronized()
       const heartbeat = () => socket.send(JSON.stringify(envelope('runner.heartbeat', { runnerId: config.runnerId, instanceId })))
@@ -242,6 +250,10 @@ async function handleControlMessage(
     state: RunnerControlState
     stateStore: RunnerStateStore
     executeLease: LeaseExecutor
+    forceQuitDriver: () => SandboxDriver
+    active: Map<string, ActiveExecution>
+    forceQuitJobs: Set<string>
+    runningCommands: Set<string>
     markSynchronized: () => Promise<void>
   },
 ): Promise<void> {
@@ -253,8 +265,14 @@ async function handleControlMessage(
     const acceptedJobs = new Set(activeLeases.filter((lease) => lease && typeof lease === 'object' && (lease as { accepted?: unknown }).accepted === true)
       .map((lease) => (lease as { jobId?: unknown }).jobId).filter((jobId): jobId is string => typeof jobId === 'string'))
     context.state.activeLeases = context.state.activeLeases.filter((lease) => acceptedJobs.has(lease.jobId))
+    await context.stateStore.save(context.state)
+    await context.markSynchronized()
     const commands = Array.isArray(parsed.value.payload.pendingCommands) ? parsed.value.payload.pendingCommands : []
     for (const command of commands) {
+      if (isForceQuitCommand(command)) {
+        void runForceQuit(command, context).catch(() => context.socket.close())
+        continue
+      }
       if (!command || typeof command !== 'object') continue
       const { commandId } = command as { commandId?: unknown }
       if (typeof commandId !== 'string' || context.state.commandJournal.some((entry) => entry.commandId === commandId)) continue
@@ -262,9 +280,12 @@ async function handleControlMessage(
       context.socket.send(JSON.stringify(envelope('runner.command.acknowledged', {
         runnerId: context.config.runnerId, commandId, state: 'accepted',
       })))
+      await context.stateStore.save(context.state)
     }
-    await context.stateStore.save(context.state)
-    await context.markSynchronized()
+    return
+  }
+  if (parsed.value.type === 'runner.command' && isForceQuitCommand(parsed.value.payload)) {
+    void runForceQuit(parsed.value.payload, context).catch(() => context.socket.close())
     return
   }
   if (parsed.value.type === 'runner.lease') {
@@ -276,7 +297,11 @@ async function handleControlMessage(
     }
     context.socket.send(JSON.stringify(envelope('lease.accept', leaseScope(context.config, lease))))
     context.socket.send(JSON.stringify(envelope('lease.heartbeat', leaseScope(context.config, lease))))
-    const completion = await context.executeLease(lease, new AbortController().signal, {
+    const controller = new AbortController()
+    if (context.forceQuitJobs.has(lease.jobId)) controller.abort()
+    const finished = (async () => {
+      if (controller.signal.aborted) return
+      const completion = await context.executeLease(lease, controller.signal, {
       async created(sandbox) {
         context.state.sandboxes = context.state.sandboxes.filter((record) => record.sandbox.providerRef !== sandbox.providerRef)
         context.state.sandboxes.push({ jobId: lease.jobId, leaseToken: lease.leaseToken, sandbox })
@@ -286,10 +311,77 @@ async function handleControlMessage(
         context.state.sandboxes = context.state.sandboxes.filter((record) => record.sandbox.providerRef !== sandbox.providerRef)
         await context.stateStore.save(context.state)
       },
-    })
-    context.socket.send(JSON.stringify(envelope('lease.result', { ...leaseScope(context.config, lease), ...completion })))
-    context.state.activeLeases = context.state.activeLeases.filter((active) => active.jobId !== lease.jobId)
+      observed(stage, faultCode) {
+        context.socket.send(JSON.stringify(envelope('lease.observation', { ...leaseScope(context.config, lease), stage, ...(faultCode ? { faultCode } : {}) })))
+      },
+      })
+      if (!controller.signal.aborted && !context.forceQuitJobs.has(lease.jobId)) {
+        context.socket.send(JSON.stringify(envelope('lease.result', { ...leaseScope(context.config, lease), ...completion })))
+        context.state.activeLeases = context.state.activeLeases.filter((active) => active.jobId !== lease.jobId)
+        await context.stateStore.save(context.state)
+      }
+    })()
+    context.active.set(lease.jobId, { controller, finished })
+    try { await finished } catch (error) { if (!controller.signal.aborted) throw error }
+    finally { context.active.delete(lease.jobId) }
+  }
+}
+
+function isForceQuitCommand(value: unknown): value is RunnerForceQuitCommand {
+  if (!value || typeof value !== 'object') return false
+  const command = value as Partial<RunnerForceQuitCommand>
+  return command.type === 'force_quit' && typeof command.commandId === 'string'
+    && typeof command.payload?.jobId === 'string' && Number.isSafeInteger(command.payload.generation)
+}
+
+async function runForceQuit(command: RunnerForceQuitCommand, context: {
+  config: RemoteRunnerConfig; socket: ControlSocket; state: RunnerControlState; stateStore: RunnerStateStore
+  active: Map<string, ActiveExecution>; forceQuitJobs: Set<string>; runningCommands: Set<string>; forceQuitDriver: () => SandboxDriver
+}): Promise<void> {
+  if (context.runningCommands.has(command.commandId)) return
+  context.runningCommands.add(command.commandId)
+  const { jobId, generation } = command.payload
+  context.forceQuitJobs.add(jobId)
+  const execution = context.active.get(jobId)
+  execution?.controller.abort()
+  let cleanupStatus: 'verified' | 'failed' = 'failed'
+  try {
+    const driver = context.forceQuitDriver()
+    const stop = async () => {
+      const discovered = await driver.discover({ runnerId: context.config.runnerId })
+      const recorded = context.state.sandboxes.filter((record) => record.jobId === jobId && record.sandbox.generation === generation).map((record) => record.sandbox)
+      const exact = new Map([...discovered.filter((sandbox) => sandbox.sandboxId === `sandbox_v1_${jobId}-${generation}` && sandbox.generation === generation), ...recorded]
+        .map((sandbox) => [sandbox.providerRef, sandbox]))
+      for (const sandbox of exact.values()) {
+        await driver.terminate(sandbox, 'cancelled')
+        await driver.destroy(sandbox)
+      }
+    }
+    await stop()
+    if (execution) {
+      let timeout: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([
+          execution.finished.catch(() => undefined),
+          new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error('Execution did not stop')), 10_000) }),
+        ])
+      } finally {
+        if (timeout) clearTimeout(timeout)
+      }
+    }
+    await stop()
+    const remaining = await driver.discover({ runnerId: context.config.runnerId })
+    if (remaining.some((sandbox) => sandbox.sandboxId === `sandbox_v1_${jobId}-${generation}`)) throw new Error('Job sandbox remains')
+    context.state.sandboxes = context.state.sandboxes.filter((record) => record.jobId !== jobId)
     await context.stateStore.save(context.state)
+    cleanupStatus = 'verified'
+  } catch {}
+  try {
+    context.socket.send(JSON.stringify(envelope('runner.force_quit_result', {
+      runnerId: context.config.runnerId, commandId: command.commandId, jobId, cleanupStatus,
+    })))
+  } finally {
+    context.runningCommands.delete(command.commandId)
   }
 }
 
@@ -387,46 +479,69 @@ function fixtureArtifact() {
 }
 
 export async function executeDockerFixture(
-  options: { runnerId: string; image: string; driver: SandboxDriver; now?: () => string; importWorkspace?: RepositoryWorkspaceImporter; onSandboxCreated?: (sandbox: SandboxLease) => Promise<void>; onSandboxCleaned?: (sandbox: SandboxLease) => Promise<void> },
+  options: { runnerId: string; image: string; driver: SandboxDriver; now?: () => string; importWorkspace?: RepositoryWorkspaceImporter; onSandboxCreated?: (sandbox: SandboxLease) => Promise<void>; onSandboxCleaned?: (sandbox: SandboxLease) => Promise<void>; onObserved?: (stage: RunnerLeaseStage, faultCode?: string) => void },
   lease: LeaseGrant,
   signal: AbortSignal,
 ): Promise<{ artifact: ReturnType<typeof fixtureArtifact>; cleanupStatus: 'verified' | 'failed' }> {
   const createdAt = (options.now ?? (() => new Date().toISOString()))()
-  const sandbox = await options.driver.create({
-    sandboxId: `sandbox_v1_${lease.jobId}-${lease.generation}`,
-    generation: lease.generation,
-    runnerId: options.runnerId,
-    specFingerprint: `docker-fixture-v1:${options.image}`,
-    createdAt,
-    expiresAt: lease.expiresAt,
-    image: options.image,
-    command: ['sh', '-ceu', 'mkdir -p /workspace && sleep infinity'],
-    resources: { memoryBytes: 128 * 1024 * 1024, pidsLimit: 64 },
-  }, signal)
+  options.onObserved?.('execution_started')
+  let sandbox: SandboxLease
+  try {
+    sandbox = await options.driver.create({
+      sandboxId: `sandbox_v1_${lease.jobId}-${lease.generation}`,
+      generation: lease.generation,
+      runnerId: options.runnerId,
+      specFingerprint: `docker-fixture-v1:${options.image}`,
+      createdAt,
+      expiresAt: lease.expiresAt,
+      image: options.image,
+      command: ['sh', '-ceu', 'mkdir -p /workspace && sleep infinity'],
+      resources: { memoryBytes: 128 * 1024 * 1024, pidsLimit: 64 },
+    }, signal)
+  } catch (error) {
+    options.onObserved?.('execution_failed', errorCode(error))
+    throw error
+  }
   try {
     await options.onSandboxCreated?.(sandbox)
+    options.onObserved?.('sandbox_created')
+    signal.throwIfAborted()
     if (!lease.checkout) throw new Error('Docker execution requires a pinned repository checkout')
     if (!options.importWorkspace) throw new Error('Docker execution is missing its repository workspace importer')
+    options.onObserved?.('workspace_import_started')
     await options.importWorkspace(lease.checkout, sandbox, options.driver, signal)
+    signal.throwIfAborted()
+    options.onObserved?.('workspace_imported')
     const result = await options.driver.exec(sandbox, { command: ['sh', '-ceu', "printf '{\"kind\":\"plan\"}\\n' > /workspace/fixture-artifact.json"] }, signal)
+    signal.throwIfAborted()
     if (result.exitCode !== 0) throw new Error('Docker fixture command failed')
+    options.onObserved?.('fixture_executed')
     const files = await options.driver.collectArtifacts(sandbox, ['/workspace/fixture-artifact.json'])
+    signal.throwIfAborted()
     if (new TextDecoder().decode(files.get('/workspace/fixture-artifact.json')) !== '{"kind":"plan"}\n') throw new Error('Docker fixture artifact was invalid')
     const artifact = fixtureArtifact()
     try {
+      options.onObserved?.('cleanup_started')
       await options.driver.terminate(sandbox, 'completed').catch(() => undefined)
       await options.driver.destroy(sandbox)
       await options.onSandboxCleaned?.(sandbox)
+      options.onObserved?.('cleanup_verified')
       return { artifact, cleanupStatus: 'verified' }
     } catch {
       return { artifact, cleanupStatus: 'failed' }
     }
   } catch (error) {
+    options.onObserved?.('execution_failed', errorCode(error))
     await options.driver.terminate(sandbox, 'failed').catch(() => undefined)
     const destroyed = await options.driver.destroy(sandbox).then(() => true, () => false)
     if (destroyed) await options.onSandboxCleaned?.(sandbox)
     throw error
   }
+}
+
+function errorCode(error: unknown): string {
+  if (error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string') return (error as { code: string }).code.slice(0, 100)
+  return 'runner.execution_failed'
 }
 
 export async function reconcileDockerSandboxes(state: RunnerControlState, driver: SandboxDriver, runnerId: string): Promise<void> {

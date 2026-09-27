@@ -21,6 +21,7 @@ import { Route as ApiV1RunnerOperationRouteImport } from './routes/api/v1/runner
 import { Route as ApiV1MessagesOrnnMessageIdRouteImport } from './routes/api/v1/messages/$ornnMessageId'
 import { Route as ApiV1JobsJobIdRouteImport } from './routes/api/v1/jobs/$jobId'
 import { Route as ApiV1GithubWebhookRouteImport } from './routes/api/v1/github/webhook'
+import { Route as ApiV1JobsJobIdForceQuitRouteImport } from './routes/api/v1/jobs/$jobId.force-quit'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -83,6 +84,11 @@ const ApiV1GithubWebhookRoute = ApiV1GithubWebhookRouteImport.update({
   path: '/api/v1/github/webhook',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiV1JobsJobIdForceQuitRoute = ApiV1JobsJobIdForceQuitRouteImport.update({
+  id: '/force-quit',
+  path: '/force-quit',
+  getParentRoute: () => ApiV1JobsJobIdRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -93,10 +99,11 @@ export interface FileRoutesByFullPath {
   '/dashboard/': typeof DashboardIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
-  '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
+  '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRouteWithChildren
   '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
   '/api/v1/runner/$operation': typeof ApiV1RunnerOperationRoute
   '/api/v1/runner/connect': typeof ApiV1RunnerConnectRoute
+  '/api/v1/jobs/$jobId/force-quit': typeof ApiV1JobsJobIdForceQuitRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -106,10 +113,11 @@ export interface FileRoutesByTo {
   '/dashboard': typeof DashboardIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
-  '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
+  '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRouteWithChildren
   '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
   '/api/v1/runner/$operation': typeof ApiV1RunnerOperationRoute
   '/api/v1/runner/connect': typeof ApiV1RunnerConnectRoute
+  '/api/v1/jobs/$jobId/force-quit': typeof ApiV1JobsJobIdForceQuitRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -121,10 +129,11 @@ export interface FileRoutesById {
   '/dashboard/': typeof DashboardIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/v1/github/webhook': typeof ApiV1GithubWebhookRoute
-  '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRoute
+  '/api/v1/jobs/$jobId': typeof ApiV1JobsJobIdRouteWithChildren
   '/api/v1/messages/$ornnMessageId': typeof ApiV1MessagesOrnnMessageIdRoute
   '/api/v1/runner/$operation': typeof ApiV1RunnerOperationRoute
   '/api/v1/runner/connect': typeof ApiV1RunnerConnectRoute
+  '/api/v1/jobs/$jobId/force-quit': typeof ApiV1JobsJobIdForceQuitRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -141,6 +150,7 @@ export interface FileRouteTypes {
     | '/api/v1/messages/$ornnMessageId'
     | '/api/v1/runner/$operation'
     | '/api/v1/runner/connect'
+    | '/api/v1/jobs/$jobId/force-quit'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -154,6 +164,7 @@ export interface FileRouteTypes {
     | '/api/v1/messages/$ornnMessageId'
     | '/api/v1/runner/$operation'
     | '/api/v1/runner/connect'
+    | '/api/v1/jobs/$jobId/force-quit'
   id:
     | '__root__'
     | '/'
@@ -168,6 +179,7 @@ export interface FileRouteTypes {
     | '/api/v1/messages/$ornnMessageId'
     | '/api/v1/runner/$operation'
     | '/api/v1/runner/connect'
+    | '/api/v1/jobs/$jobId/force-quit'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -176,7 +188,7 @@ export interface RootRouteChildren {
   LoginRoute: typeof LoginRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiV1GithubWebhookRoute: typeof ApiV1GithubWebhookRoute
-  ApiV1JobsJobIdRoute: typeof ApiV1JobsJobIdRoute
+  ApiV1JobsJobIdRoute: typeof ApiV1JobsJobIdRouteWithChildren
   ApiV1MessagesOrnnMessageIdRoute: typeof ApiV1MessagesOrnnMessageIdRoute
   ApiV1RunnerOperationRoute: typeof ApiV1RunnerOperationRoute
   ApiV1RunnerConnectRoute: typeof ApiV1RunnerConnectRoute
@@ -268,6 +280,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiV1GithubWebhookRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/v1/jobs/$jobId/force-quit': {
+      id: '/api/v1/jobs/$jobId/force-quit'
+      path: '/force-quit'
+      fullPath: '/api/v1/jobs/$jobId/force-quit'
+      preLoaderRoute: typeof ApiV1JobsJobIdForceQuitRouteImport
+      parentRoute: typeof ApiV1JobsJobIdRoute
+    }
   }
 }
 
@@ -287,13 +306,25 @@ const DashboardRouteWithChildren = DashboardRoute._addFileChildren(
   DashboardRouteChildren,
 )
 
+interface ApiV1JobsJobIdRouteChildren {
+  ApiV1JobsJobIdForceQuitRoute: typeof ApiV1JobsJobIdForceQuitRoute
+}
+
+const ApiV1JobsJobIdRouteChildren: ApiV1JobsJobIdRouteChildren = {
+  ApiV1JobsJobIdForceQuitRoute: ApiV1JobsJobIdForceQuitRoute,
+}
+
+const ApiV1JobsJobIdRouteWithChildren = ApiV1JobsJobIdRoute._addFileChildren(
+  ApiV1JobsJobIdRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DashboardRoute: DashboardRouteWithChildren,
   LoginRoute: LoginRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiV1GithubWebhookRoute: ApiV1GithubWebhookRoute,
-  ApiV1JobsJobIdRoute: ApiV1JobsJobIdRoute,
+  ApiV1JobsJobIdRoute: ApiV1JobsJobIdRouteWithChildren,
   ApiV1MessagesOrnnMessageIdRoute: ApiV1MessagesOrnnMessageIdRoute,
   ApiV1RunnerOperationRoute: ApiV1RunnerOperationRoute,
   ApiV1RunnerConnectRoute: ApiV1RunnerConnectRoute,

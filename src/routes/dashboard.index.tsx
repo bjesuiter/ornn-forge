@@ -7,6 +7,7 @@ import {
   createDashboardRunner,
   decommissionDashboardRunner,
   disconnectDashboardOpenAiSubscription,
+  forceQuitDashboardJob,
   getDashboardSnapshot,
   setDashboardRunnerLabel,
   setDashboardRunnerPaused,
@@ -40,6 +41,11 @@ function DashboardRoute() {
 
   async function setRunnerPaused(runnerId: string, paused: boolean) {
     await setDashboardRunnerPaused({ data: { runnerId, paused } })
+    await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+  }
+
+  async function forceQuitJob(jobId: string) {
+    await forceQuitDashboardJob({ data: { jobId } })
     await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
   }
 
@@ -81,6 +87,7 @@ function DashboardRoute() {
     webhooks={webhooks}
     onSignOut={signOut}
     onSetRunnerPaused={setRunnerPaused}
+    onForceQuitJob={forceQuitJob}
     onSetRunnerLabel={setRunnerLabel}
     onCreateRunner={createRunner}
     onDecommissionRunner={decommissionRunner}

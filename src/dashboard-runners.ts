@@ -32,6 +32,9 @@ export type DashboardRunnerJob = {
   startedAt: string
   lastHeartbeatAt: string
   expiresAt: string
+  forceQuitRequestedAt?: string
+  forceQuitCompletedAt?: string
+  cleanupStatus?: string
 }
 
 export type DashboardRunnerResult = {
@@ -76,6 +79,9 @@ type DashboardRunnerJobRow = {
   created_at: string
   last_heartbeat_at: string
   expires_at: string
+  force_quit_requested_at?: string | null
+  force_quit_completed_at?: string | null
+  cleanup_status?: string | null
 }
 
 type DashboardRunnerResultRow = {
@@ -117,9 +123,10 @@ export async function listDashboardRunners(
       WHERE runner.decommissioned_at IS NULL
       ORDER BY runner.runner_id ASC`).all<DashboardRunnerRow>(),
     database.prepare(`SELECT l.runner_id, l.job_id, i.github_repository_full_name, i.github_issue_number,
-      i.github_issue_title, l.generation, l.created_at, l.last_heartbeat_at, l.expires_at
+      i.github_issue_title, l.generation, l.created_at, l.last_heartbeat_at, l.expires_at,
+      j.force_quit_requested_at, j.force_quit_completed_at, j.cleanup_status
       FROM runner_leases l
-      JOIN jobs j ON j.job_id = l.job_id AND j.state = 'leased'
+      JOIN jobs j ON j.job_id = l.job_id AND j.state = 'leased' AND j.cleanup_status IS NOT 'verified'
       JOIN invocations i ON i.invocation_id = j.invocation_id
       ORDER BY l.created_at ASC`).all<DashboardRunnerJobRow>(),
     database.prepare(`SELECT runner_id, job_id, github_repository_full_name, github_issue_number,
@@ -179,6 +186,9 @@ function runnerJobFromRow(row: DashboardRunnerJobRow): DashboardRunnerJob {
     id: row.job_id, repository: row.github_repository_full_name, issueNumber: row.github_issue_number,
     issueTitle: row.github_issue_title, generation: row.generation, startedAt: row.created_at,
     lastHeartbeatAt: row.last_heartbeat_at, expiresAt: row.expires_at,
+    ...(row.force_quit_requested_at ? { forceQuitRequestedAt: row.force_quit_requested_at } : {}),
+    ...(row.force_quit_completed_at ? { forceQuitCompletedAt: row.force_quit_completed_at } : {}),
+    ...(row.cleanup_status ? { cleanupStatus: row.cleanup_status } : {}),
   }
 }
 

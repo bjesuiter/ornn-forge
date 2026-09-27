@@ -114,6 +114,60 @@ test('admits one signed delivery and lets the operator inspect its pending Analy
   expect(await resolved.json()).toMatchObject({ job: { id: accepted.jobId }, message: { id: inspection.message.id } })
 })
 
+test('retains a redacted Runner execution boundary for an accepted lease', async () => {
+  const store = createInMemoryInvocationStore()
+  const app = createControlPlane({
+    store, githubWebhookSecret: webhookSecret, githubInstallationId: '42', githubRepositoryId: '99', operatorBearerSecret: operatorSecret,
+  })
+  const admitted = await app.fetch(await signedWebhookRequest('delivery-observation', issueComment()))
+  const { jobId } = await admitted.json() as { jobId: string }
+  const lease = await store.pollRunner?.('runner_homeserv1')
+  expect(lease).toBeDefined()
+  expect(await store.recordLeaseObservation?.({
+    runnerId: 'runner_homeserv1', jobId, leaseToken: lease!.leaseToken, stage: 'execution_failed', faultCode: 'runner.execution_failed',
+  })).toBe(true)
+  expect(await store.recordLeaseObservation?.({
+    runnerId: 'runner_homeserv1', jobId, leaseToken: lease!.leaseToken, stage: 'execution_failed', faultCode: 'runner.execution_failed',
+  })).toBe(true)
+  expect(await store.recordLeaseObservation?.({
+    runnerId: 'runner_homeserv1', jobId, leaseToken: 'wrong', stage: 'execution_started',
+  })).toBe(false)
+  const inspection = await store.inspectJob(jobId)
+  expect(inspection?.events.filter((event) => event.type === 'job.runner_observed')).toEqual([
+    expect.objectContaining({ observation: { stage: 'execution_failed', faultCode: 'runner.execution_failed' } }),
+  ])
+})
+
+test('Force Quit is idempotent, fences a late result, and releases capacity only after verified cleanup', async () => {
+  const store = createInMemoryInvocationStore()
+  const app = createControlPlane({
+    store, githubWebhookSecret: webhookSecret, githubInstallationId: '42', githubRepositoryId: '99', operatorBearerSecret: operatorSecret,
+  })
+  const admitted = await app.fetch(await signedWebhookRequest('delivery-force-quit', issueComment()))
+  const { jobId } = await admitted.json() as { jobId: string }
+  const lease = await store.pollRunner?.('runner_homeserv1')
+  expect(lease?.jobId).toBe(jobId)
+  const request = () => app.fetch(new Request(`https://ornn.example/api/v1/jobs/${jobId}/force-quit`, {
+    method: 'POST', headers: { authorization: `Bearer ${operatorSecret}` },
+  }))
+  expect((await request()).status).toBe(202)
+  expect((await request()).status).toBe(202)
+  const commands = await store.pendingRunnerCommands?.('runner_homeserv1')
+  expect(commands).toHaveLength(1)
+  expect(commands?.[0]).toMatchObject({ type: 'force_quit', payload: { jobId, generation: lease?.generation } })
+  expect(await store.completeLease?.({
+    runnerId: 'runner_homeserv1', jobId, leaseToken: lease!.leaseToken,
+    artifact: { schemaVersion: 1, kind: 'plan', summary: 'Late result', details: 'Too late.' }, cleanupStatus: 'verified',
+  })).toBe('invalid_artifact')
+  expect(await store.completeForceQuit?.({ runnerId: 'other', commandId: commands![0].commandId, jobId, cleanupStatus: 'verified' })).toBe(false)
+  expect(await store.completeForceQuit?.({ runnerId: 'runner_homeserv1', commandId: commands![0].commandId, jobId, cleanupStatus: 'failed' })).toBe(true)
+  expect((await store.inspectJob(jobId))?.job.state).toBe('cancelled')
+  expect((await store.inspectJob(jobId))?.cleanupStatus?.status).toBe('failed')
+  expect((await store.inspectJob(jobId))?.events.map((event) => event.type)).toContain('job.force_quit_completed')
+  expect(await store.pendingRunnerCommands?.('runner_homeserv1')).toEqual([])
+  expect((await request()).status).toBe(409)
+})
+
 test('issues independent, short-lived, one-time Setup tokens for Remote Runner enrollment', async () => {
   let now = new Date('2026-09-06T12:00:00.000Z')
   const app = createControlPlane({

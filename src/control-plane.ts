@@ -2,12 +2,14 @@ import {
   envelope,
   isAnalysisArtifact,
   isRunnerFault,
+  isRunnerLeaseStage,
   isRunnerProfile,
   parseRunnerEnvelope,
   type AnalysisArtifact,
   type LeaseGrant,
   type RunnerCommandJournalEntry,
   type RunnerFault,
+  type RunnerLeaseStage,
   type RunnerSynchronization,
   type RunnerDesiredConfiguration,
   type RunnerProfile,
@@ -34,6 +36,7 @@ export type ControlPlaneOptions = {
   runnerCredentialId?: string
   runnerCredentialSecret?: string
   runnerConnection?: { connect(runnerId: string, request: Request): Promise<Response> }
+  notifyRunner?: (runnerId: string) => Promise<void>
   messagePublisher?: OrnnMessagePublisher
   now?: () => Date
 }
@@ -63,6 +66,7 @@ type EventRecord = {
   type: string
   revision: string
   occurredAt: string
+  observation?: { stage: RunnerLeaseStage; faultCode?: string }
 }
 
 export type JobInspection = {
@@ -81,7 +85,7 @@ export type JobInspection = {
   }
   job: {
     id: string
-    state: 'pending' | 'leased' | 'succeeded'
+    state: 'pending' | 'leased' | 'succeeded' | 'force_quit_requested' | 'cancelled'
     flow: { id: 'analyze'; versionId: string }
     policy: { versionId: string }
     createdAt: string
@@ -120,6 +124,10 @@ export interface InvocationStore {
   heartbeatLease?(input: LeaseInput): Promise<boolean>
   releaseLease?(input: LeaseInput): Promise<boolean>
   completeLease?(input: LeaseInput & { artifact: AnalysisArtifact; cleanupStatus: 'verified' | 'failed' }): Promise<'accepted' | 'invalid_artifact'>
+  recordLeaseObservation?(input: LeaseInput & { stage: RunnerLeaseStage; faultCode?: string }): Promise<boolean>
+  requestForceQuit?(jobId: string): Promise<{ state: 'requested' | 'already_requested'; runnerId: string } | { state: 'terminal' | 'not_found' }>
+  completeForceQuit?(input: { runnerId: string; commandId: string; jobId: string; cleanupStatus: 'verified' | 'failed' }): Promise<boolean>
+  pendingRunnerCommands?(runnerId: string): Promise<Array<{ commandId: string; type: string; payload: Record<string, unknown> }>>
   recordRunnerSuccess?(runnerId: string): Promise<void>
   recordRunnerFault?(runnerId: string, fault: RunnerFault): Promise<void>
   recordMessagePublication?(jobId: string, update: { githubCommentId?: string; attempt: OrnnMessageState['latestAttempt'] }): Promise<void>
@@ -249,6 +257,15 @@ export function createControlPlane(options: ControlPlaneOptions) {
       }
 
       const jobMatch = /^\/api\/v1\/jobs\/([^/]+)$/.exec(url.pathname)
+      const forceQuitMatch = /^\/api\/v1\/jobs\/([^/]+)\/force-quit$/.exec(url.pathname)
+      if (request.method === 'POST' && forceQuitMatch) {
+        if (!(await isAuthenticatedOperator(request, operatorCredential))) return json({ apiVersion: API_VERSION, error: { code: 'operator_unauthorized' } }, 401)
+        const jobId = decodeURIComponent(forceQuitMatch[1])
+        const result = await options.store.requestForceQuit?.(jobId) ?? { state: 'not_found' }
+        if (!('runnerId' in result)) return json({ apiVersion: API_VERSION, error: { code: result.state === 'not_found' ? 'job_not_found' : 'job_terminal' } }, result.state === 'not_found' ? 404 : 409, { 'Cache-Control': 'no-store' })
+        await options.notifyRunner?.(result.runnerId).catch(() => undefined)
+        return json({ apiVersion: API_VERSION, jobId, state: 'force_quit_requested' }, 202, { 'Cache-Control': 'no-store' })
+      }
       if (request.method === 'GET' && jobMatch) {
         if (!(await isAuthenticatedOperator(request, operatorCredential))) {
           return json({ apiVersion: API_VERSION, error: { code: 'operator_unauthorized' } }, 401)
@@ -785,6 +802,7 @@ export function createInMemoryInvocationStore(): InvocationStore {
   const pausedRunners = new Set<string>()
   const decommissionedRunners = new Set<string>()
   const runnerPresence = new Map<string, string>()
+  const forceQuitCommands = new Map<string, { commandId: string; runnerId: string; jobId: string; generation: number; completed: boolean }>()
   const leasesByJob = new Map<string, {
     runnerId: string
     tokenDigest: string
@@ -960,7 +978,7 @@ export function createInMemoryInvocationStore(): InvocationStore {
       const lease = await matchingLease(leasesByJob, input)
       if (!lease) return 'invalid_artifact'
       const inspection = inspectionsByJob.get(input.jobId)
-      if (!inspection) return 'invalid_artifact'
+      if (!inspection || inspection.job.state !== 'leased') return 'invalid_artifact'
       inspection.job.state = 'succeeded'
       inspection.artifact = input.artifact
       inspection.executionOutcome = { status: 'succeeded', completedAt: new Date().toISOString() }
@@ -972,6 +990,45 @@ export function createInMemoryInvocationStore(): InvocationStore {
       inspection.events.push({ id: opaqueId('evt'), type: 'job.succeeded', revision: String(inspection.events.length + 1), occurredAt: inspection.executionOutcome.completedAt })
       if (input.cleanupStatus === 'verified') leasesByJob.delete(input.jobId)
       return 'accepted'
+    },
+    async recordLeaseObservation(input) {
+      const lease = await matchingLease(leasesByJob, input)
+      const inspection = inspectionsByJob.get(input.jobId)
+      if (!lease || !inspection || inspection.job.state !== 'leased') return false
+      const observation = { stage: input.stage, ...(input.faultCode ? { faultCode: input.faultCode } : {}) }
+      if (inspection.events.some((event) => event.type === 'job.runner_observed' && JSON.stringify(event.observation) === JSON.stringify(observation))) return true
+      inspection.events.push({ id: opaqueId('evt'), type: 'job.runner_observed', revision: String(inspection.events.length + 1), occurredAt: new Date().toISOString(), observation })
+      return true
+    },
+    async requestForceQuit(jobId) {
+      const inspection = inspectionsByJob.get(jobId)
+      if (!inspection) return { state: 'not_found' }
+      const existing = forceQuitCommands.get(jobId)
+      if (existing) return inspection.job.state === 'cancelled' ? { state: 'terminal' } : { state: 'already_requested', runnerId: existing.runnerId }
+      const lease = leasesByJob.get(jobId)
+      if (!lease || inspection.job.state !== 'leased') return { state: 'terminal' }
+      const commandId = opaqueId('command')
+      forceQuitCommands.set(jobId, { commandId, runnerId: lease.runnerId, jobId, generation: lease.generation, completed: false })
+      inspection.job.state = 'force_quit_requested'
+      inspection.events.push({ id: opaqueId('evt'), type: 'job.force_quit_requested', revision: String(inspection.events.length + 1), occurredAt: new Date().toISOString() })
+      return { state: 'requested', runnerId: lease.runnerId }
+    },
+    async pendingRunnerCommands(runnerId) {
+      return [...forceQuitCommands.values()].filter((command) => command.runnerId === runnerId && !command.completed)
+        .map(({ commandId, jobId, generation }) => ({ commandId, type: 'force_quit', payload: { jobId, generation } }))
+    },
+    async completeForceQuit(input) {
+      const command = forceQuitCommands.get(input.jobId)
+      const inspection = inspectionsByJob.get(input.jobId)
+      if (!command || !inspection || command.runnerId !== input.runnerId || command.commandId !== input.commandId || inspection.job.state !== 'force_quit_requested') return false
+      command.completed = true
+      const now = new Date().toISOString()
+      inspection.job.state = 'cancelled'
+      inspection.executionOutcome = { status: 'cancelled', completedAt: now }
+      inspection.cleanupStatus = { status: input.cleanupStatus, updatedAt: now }
+      inspection.events.push({ id: opaqueId('evt'), type: 'job.force_quit_completed', revision: String(inspection.events.length + 1), occurredAt: now })
+      if (input.cleanupStatus === 'verified') leasesByJob.delete(input.jobId)
+      return true
     },
     async recordRunnerSuccess() {},
     async recordRunnerFault() {},
@@ -1155,6 +1212,7 @@ class D1InvocationStore implements InvocationStore {
     const row = await this.database.prepare(`SELECT
       j.job_id, j.state, j.flow_id, j.flow_version_id, j.policy_version_id AS job_policy_version_id,
       j.created_at AS job_created_at, j.execution_status, j.execution_completed_at, j.cleanup_status, j.cleanup_updated_at,
+      j.force_quit_requested_at, j.force_quit_completed_at,
       m.message_id, m.revision AS message_revision, m.effect_key, m.github_comment_id AS github_message_comment_id, m.latest_attempt,
       a.artifact_json, i.invocation_id, i.github_delivery_id,
       i.github_installation_id, i.github_repository_id, i.github_repository_full_name,
@@ -1166,7 +1224,8 @@ class D1InvocationStore implements InvocationStore {
       LEFT JOIN analysis_artifacts a ON a.job_id = j.job_id
       WHERE j.job_id = ?`).bind(jobId).first<{
         job_id: string; state: 'pending' | 'leased' | 'succeeded'; flow_id: 'analyze'; flow_version_id: string; job_policy_version_id: string; job_created_at: string
-        execution_status: 'succeeded' | null; execution_completed_at: string | null
+        execution_status: 'succeeded' | 'cancelled' | null; execution_completed_at: string | null
+        force_quit_requested_at: string | null; force_quit_completed_at: string | null
         cleanup_status: CleanupStatus['status'] | null; cleanup_updated_at: string | null
         message_id: string | null; message_revision: number | null; effect_key: string | null; github_message_comment_id: string | null; latest_attempt: OrnnMessageState['latestAttempt'] | null
         artifact_json: string | null
@@ -1181,6 +1240,15 @@ class D1InvocationStore implements InvocationStore {
         event_id: string; event_type: string; revision: number; created_at: string
       }>()
     const artifact = row.artifact_json === null ? undefined : JSON.parse(row.artifact_json) as AnalysisArtifact
+    const observations = await this.database.prepare(`SELECT revision, payload_json FROM domain_events WHERE stream_kind = 'job' AND stream_id = ? AND event_type = 'job.runner_observed'`).bind(jobId).all<{ revision: number; payload_json: string }>()
+    const observationsByRevision = new Map(observations.results.flatMap((event) => {
+      try {
+        const value = JSON.parse(event.payload_json) as { stage?: unknown; faultCode?: unknown }
+        return isRunnerLeaseStage(value.stage) && (value.faultCode === undefined || typeof value.faultCode === 'string')
+          ? [[String(event.revision), { stage: value.stage, ...(typeof value.faultCode === 'string' ? { faultCode: value.faultCode } : {}) }]] as const
+          : []
+      } catch { return [] }
+    }))
     return {
       invocation: {
         id: row.invocation_id,
@@ -1197,7 +1265,7 @@ class D1InvocationStore implements InvocationStore {
       },
       job: {
         id: row.job_id,
-        state: row.state,
+        state: row.force_quit_completed_at ? 'cancelled' : row.force_quit_requested_at ? 'force_quit_requested' : row.state,
         flow: { id: row.flow_id, versionId: row.flow_version_id },
         policy: { versionId: row.job_policy_version_id },
         createdAt: row.job_created_at,
@@ -1207,6 +1275,7 @@ class D1InvocationStore implements InvocationStore {
         type: event.event_type,
         revision: String(event.revision),
         occurredAt: event.created_at,
+        ...(observationsByRevision.has(String(event.revision)) ? { observation: observationsByRevision.get(String(event.revision)) } : {}),
       })),
       message: row.message_id === null || row.message_revision === null || row.effect_key === null || row.latest_attempt === null
         ? undefined
@@ -1389,6 +1458,65 @@ class D1InvocationStore implements InvocationStore {
     return result.meta.changes === 1
   }
 
+  async pendingRunnerCommands(runnerId: string): Promise<Array<{ commandId: string; type: string; payload: Record<string, unknown> }>> {
+    const rows = await this.database.prepare(`SELECT c.command_id, c.command_type, c.payload_json FROM runner_commands c
+      JOIN jobs j ON j.force_quit_command_id = c.command_id
+      WHERE c.runner_id = ? AND j.force_quit_requested_at IS NOT NULL AND j.force_quit_completed_at IS NULL
+      ORDER BY c.created_at`).bind(runnerId).all<{ command_id: string; command_type: string; payload_json: string }>()
+    return rows.results.map((row) => ({ commandId: row.command_id, type: row.command_type, payload: JSON.parse(row.payload_json) as Record<string, unknown> }))
+  }
+
+  async requestForceQuit(jobId: string): Promise<{ state: 'requested' | 'already_requested'; runnerId: string } | { state: 'terminal' | 'not_found' }> {
+    const row = await this.database.prepare(`SELECT j.state, j.force_quit_requested_at, j.force_quit_completed_at, l.runner_id, l.generation
+      FROM jobs j LEFT JOIN runner_leases l ON l.job_id = j.job_id WHERE j.job_id = ?`).bind(jobId).first<{
+      state: string; force_quit_requested_at: string | null; force_quit_completed_at: string | null; runner_id: string | null; generation: number | null
+    }>()
+    if (!row) return { state: 'not_found' }
+    if (row.force_quit_completed_at || row.state !== 'leased' || !row.runner_id || row.generation === null) return { state: 'terminal' }
+    if (row.force_quit_requested_at) return { state: 'already_requested', runnerId: row.runner_id }
+    const now = new Date().toISOString()
+    const commandId = opaqueId('command')
+    const payload = canonicalJson({ jobId, generation: row.generation })
+    const eventPayload = canonicalJson({ jobId, runnerId: row.runner_id })
+    const revision = await this.nextJobRevision(jobId)
+    await this.database.batch([
+      this.database.prepare(`UPDATE jobs SET force_quit_requested_at = ?, force_quit_command_id = ?
+        WHERE job_id = ? AND state = 'leased' AND force_quit_requested_at IS NULL`).bind(now, commandId, jobId),
+      this.database.prepare(`INSERT INTO runner_commands (command_id, runner_id, command_type, payload_json, created_at)
+        SELECT ?, ?, 'force_quit', ?, ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND force_quit_command_id = ?)`)
+        .bind(commandId, row.runner_id, payload, now, jobId, commandId),
+      this.database.prepare(`INSERT INTO domain_events (event_id, schema_version, stream_kind, stream_id, revision, event_type, payload_json, payload_sha256, created_at)
+        SELECT ?, ?, 'job', ?, ?, 'job.force_quit_requested', ?, ?, ? WHERE EXISTS
+        (SELECT 1 FROM jobs WHERE job_id = ? AND force_quit_command_id = ?)`)
+        .bind(opaqueId('evt'), EVENT_SCHEMA_VERSION, jobId, revision, eventPayload, await sha256(eventPayload), now, jobId, commandId),
+    ])
+    const current = await this.database.prepare('SELECT state, force_quit_command_id FROM jobs WHERE job_id = ?').bind(jobId).first<{ state: string; force_quit_command_id: string | null }>()
+    if (!current?.force_quit_command_id || current.state !== 'leased') return { state: 'terminal' }
+    return { state: current.force_quit_command_id === commandId ? 'requested' : 'already_requested', runnerId: row.runner_id }
+  }
+
+  async completeForceQuit(input: { runnerId: string; commandId: string; jobId: string; cleanupStatus: 'verified' | 'failed' }): Promise<boolean> {
+    const now = new Date().toISOString()
+    const payload = canonicalJson({ jobId: input.jobId, cleanupStatus: input.cleanupStatus })
+    const revision = await this.nextJobRevision(input.jobId)
+    const result = await this.database.batch([
+      this.database.prepare(`UPDATE jobs SET execution_status = 'cancelled', execution_completed_at = ?, cleanup_status = ?, cleanup_updated_at = ?, force_quit_completed_at = ?
+        WHERE job_id = ? AND state = 'leased' AND force_quit_requested_at IS NOT NULL AND force_quit_completed_at IS NULL
+        AND force_quit_command_id = ? AND EXISTS (SELECT 1 FROM runner_commands WHERE command_id = ? AND runner_id = ?)`)
+        .bind(now, input.cleanupStatus, now, now, input.jobId, input.commandId, input.commandId, input.runnerId),
+      this.database.prepare(`INSERT INTO domain_events (event_id, schema_version, stream_kind, stream_id, revision, event_type, payload_json, payload_sha256, created_at)
+        SELECT ?, ?, 'job', ?, ?, 'job.force_quit_completed', ?, ?, ? WHERE EXISTS
+        (SELECT 1 FROM jobs WHERE job_id = ? AND force_quit_command_id = ? AND force_quit_completed_at = ?)
+        AND NOT EXISTS (SELECT 1 FROM runner_command_journal WHERE runner_id = ? AND command_id = ? AND state = 'completed')`)
+        .bind(opaqueId('evt'), EVENT_SCHEMA_VERSION, input.jobId, revision, payload, await sha256(payload), now, input.jobId, input.commandId, now, input.runnerId, input.commandId),
+      this.database.prepare(`INSERT INTO runner_command_journal (runner_id, command_id, state, reported_at)
+        SELECT ?, ?, 'completed', ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND force_quit_command_id = ? AND force_quit_completed_at = ?)
+        ON CONFLICT(runner_id, command_id) DO UPDATE SET state = 'completed', reported_at = excluded.reported_at`)
+        .bind(input.runnerId, input.commandId, now, input.jobId, input.commandId, now),
+    ])
+    return result[0].meta.changes === 1
+  }
+
   async pollRunner(runnerId: string): Promise<LeaseGrant | undefined> {
     const runner = await this.remoteRunner(runnerId)
     if (!runner || runner.enrollment !== 'enrolled') return undefined
@@ -1506,7 +1634,7 @@ class D1InvocationStore implements InvocationStore {
     const tokenDigest = await sha256(input.leaseToken)
     const result = await this.database.prepare(`UPDATE runner_leases SET expires_at = ?, last_heartbeat_at = ?
       WHERE job_id = ? AND runner_id = ? AND token_digest = ? AND expires_at > ?
-      AND EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'leased')`).bind(
+      AND EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND state = 'leased' AND force_quit_completed_at IS NULL)`).bind(
       expiry, now, input.jobId, input.runnerId, tokenDigest, now, input.jobId,
     ).run()
     return result.meta.changes === 1
@@ -1516,14 +1644,14 @@ class D1InvocationStore implements InvocationStore {
     const now = new Date().toISOString()
     const tokenDigest = await sha256(input.leaseToken)
     const valid = await this.database.prepare(`SELECT 1 FROM jobs j JOIN runner_leases l ON l.job_id = j.job_id
-      WHERE j.job_id = ? AND j.state = 'leased' AND l.runner_id = ? AND l.token_digest = ? AND l.expires_at > ?`).bind(
+      WHERE j.job_id = ? AND j.state = 'leased' AND j.force_quit_requested_at IS NULL AND l.runner_id = ? AND l.token_digest = ? AND l.expires_at > ?`).bind(
       input.jobId, input.runnerId, tokenDigest, now,
     ).first()
     if (!valid) return false
     const payload = canonicalJson({ jobId: input.jobId, runnerId: input.runnerId, reason: 'checkout_unavailable' })
     const revision = await this.nextJobRevision(input.jobId)
     await this.database.batch([
-      this.database.prepare(`UPDATE jobs SET state = 'pending' WHERE job_id = ? AND state = 'leased'
+      this.database.prepare(`UPDATE jobs SET state = 'pending' WHERE job_id = ? AND state = 'leased' AND force_quit_requested_at IS NULL
         AND EXISTS (SELECT 1 FROM runner_leases WHERE job_id = ? AND runner_id = ? AND token_digest = ? AND expires_at > ?)`).bind(
         input.jobId, input.jobId, input.runnerId, tokenDigest, now,
       ),
@@ -1542,7 +1670,7 @@ class D1InvocationStore implements InvocationStore {
     const now = new Date().toISOString()
     const tokenDigest = await sha256(input.leaseToken)
     const validLease = await this.database.prepare(`SELECT 1 FROM jobs j JOIN runner_leases l ON l.job_id = j.job_id
-      WHERE j.job_id = ? AND j.state = 'leased' AND l.runner_id = ? AND l.token_digest = ? AND l.expires_at > ?`).bind(
+      WHERE j.job_id = ? AND j.state = 'leased' AND j.force_quit_requested_at IS NULL AND l.runner_id = ? AND l.token_digest = ? AND l.expires_at > ?`).bind(
       input.jobId, input.runnerId, tokenDigest, now,
     ).first()
     if (!validLease) return 'invalid_artifact'
@@ -1551,7 +1679,7 @@ class D1InvocationStore implements InvocationStore {
     const revision = await this.nextJobRevision(input.jobId)
     await this.database.batch([
       this.database.prepare(`UPDATE jobs SET state = 'succeeded', execution_status = 'succeeded', execution_completed_at = ?, cleanup_status = ?, cleanup_updated_at = ?
-        WHERE job_id = ? AND state = 'leased' AND EXISTS (SELECT 1 FROM runner_leases
+        WHERE job_id = ? AND state = 'leased' AND force_quit_requested_at IS NULL AND EXISTS (SELECT 1 FROM runner_leases
         WHERE job_id = ? AND runner_id = ? AND token_digest = ? AND expires_at > ?)`).bind(
         now, input.cleanupStatus, now, input.jobId, input.jobId, input.runnerId, tokenDigest, now,
       ),
@@ -1588,6 +1716,24 @@ class D1InvocationStore implements InvocationStore {
     const completed = await this.database.prepare(`SELECT state FROM jobs WHERE job_id = ?`).bind(input.jobId)
       .first<{ state: string }>()
     return completed?.state === 'succeeded' ? 'accepted' : 'invalid_artifact'
+  }
+
+  async recordLeaseObservation(input: LeaseInput & { stage: RunnerLeaseStage; faultCode?: string }): Promise<boolean> {
+    const now = new Date().toISOString()
+    const tokenDigest = await sha256(input.leaseToken)
+    const valid = await this.database.prepare(`SELECT 1 FROM jobs j JOIN runner_leases l ON l.job_id = j.job_id
+      WHERE j.job_id = ? AND j.state = 'leased' AND l.runner_id = ? AND l.token_digest = ? AND l.expires_at > ?`).bind(
+      input.jobId, input.runnerId, tokenDigest, now,
+    ).first()
+    if (!valid) return false
+    const payload = canonicalJson({ stage: input.stage, ...(input.faultCode ? { faultCode: input.faultCode } : {}) })
+    const payloadSha256 = await sha256(payload)
+    const revision = await this.nextJobRevision(input.jobId)
+    const result = await this.database.prepare(`INSERT INTO domain_events (event_id, schema_version, stream_kind, stream_id, revision, event_type, payload_json, payload_sha256, created_at)
+      SELECT ?, ?, 'job', ?, ?, 'job.runner_observed', ?, ?, ? WHERE NOT EXISTS (
+        SELECT 1 FROM domain_events WHERE stream_kind = 'job' AND stream_id = ? AND event_type = 'job.runner_observed' AND payload_sha256 = ?
+      )`).bind(opaqueId('evt'), EVENT_SCHEMA_VERSION, input.jobId, revision, payload, payloadSha256, now, input.jobId, payloadSha256).run()
+    return result.meta.changes === 1 || (await this.database.prepare(`SELECT 1 FROM domain_events WHERE stream_kind = 'job' AND stream_id = ? AND event_type = 'job.runner_observed' AND payload_sha256 = ?`).bind(input.jobId, payloadSha256).first()) !== undefined
   }
 
   async recordMessagePublication(jobId: string, update: { githubCommentId?: string; attempt: OrnnMessageState['latestAttempt'] }): Promise<void> {

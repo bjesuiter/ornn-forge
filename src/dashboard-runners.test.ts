@@ -14,6 +14,7 @@ const migrations = [
   '0012_add_runner_labels.sql',
   '0013_add_dashboard_read_models.sql',
   '0014_add_runner_decommissioning.sql',
+  '0015_force_quit.sql',
 ].map((name) => readFileSync(new URL(`../migrations/${name}`, import.meta.url), 'utf8'))
 
 test('the dashboard keeps runner presence, pause, faults, capacity, and work as independent dimensions', () => {
@@ -101,6 +102,20 @@ test('the dashboard query keeps enrollment, readiness, and presence separate', a
   database.run("INSERT INTO runner_credentials VALUES ('runner_enrolled', 'digest-only', '2026-09-06T12:00:00.000Z')")
   database.run("INSERT INTO runner_presence VALUES ('runner_enrolled', '2026-09-06T12:00:00.000Z')")
   database.run("UPDATE remote_runners SET decommissioned_at = '2026-09-06T12:01:00.000Z', decommission_mode = 'normal' WHERE runner_id = 'runner_decommissioned'")
+  for (const [suffix, cleanup] of [['failed', 'failed'], ['verified', 'verified']] as const) {
+    database.run(`INSERT INTO invocations VALUES (
+      'inv_${suffix}', 1, 'delivery_${suffix}', '42', '99', 'bjesuiter/ornn-forge', 22,
+      'Force Quit', '', 'comment_${suffix}', '', 'bjesuiter', '{}', 'policy', '2026-09-06T11:50:00.000Z'
+    )`)
+    database.run(`INSERT INTO jobs (job_id, schema_version, invocation_id, state, flow_id, flow_version_id, policy_version_id,
+      created_at, execution_status, execution_completed_at, cleanup_status, cleanup_updated_at,
+      force_quit_requested_at, force_quit_completed_at, force_quit_command_id)
+      VALUES ('job_${suffix}', 1, 'inv_${suffix}', 'leased', 'analyze', 'flow', 'policy',
+      '2026-09-06T11:50:00.000Z', 'cancelled', '2026-09-06T11:59:00.000Z', '${cleanup}', '2026-09-06T11:59:00.000Z',
+      '2026-09-06T11:58:00.000Z', '2026-09-06T11:59:00.000Z', 'command_${suffix}')`)
+    database.run(`INSERT INTO runner_leases VALUES ('job_${suffix}', 'runner_enrolled', 1, 'digest',
+      '2026-09-06T12:00:30.000Z', '2026-09-06T11:58:00.000Z', '2026-09-06T11:50:00.000Z')`)
+  }
 
   const runners = await listDashboardRunners(sqliteDashboardDatabase(database), new Date('2026-09-06T12:00:05.000Z'))
 
@@ -108,6 +123,9 @@ test('the dashboard query keeps enrollment, readiness, and presence separate', a
     { id: 'runner_awaiting', label: 'Unbenannt', enrollment: 'awaiting_setup', ready: false, online: false, desiredCapacity: 2 },
     { id: 'runner_enrolled', label: 'Unbenannt', enrollment: 'enrolled', ready: true, online: true, desiredCapacity: 3 },
   ])
+  expect(runners.find((runner) => runner.id === 'runner_enrolled')).toMatchObject({
+    reservations: 1, activeJobs: [{ id: 'job_failed', forceQuitCompletedAt: '2026-09-06T11:59:00.000Z', cleanupStatus: 'failed' }],
+  })
 })
 
 function sqliteDashboardDatabase(database: Database): DashboardRunnerDatabase {

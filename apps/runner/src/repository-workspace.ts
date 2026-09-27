@@ -92,10 +92,14 @@ async function transferWorkspace(files: WorkspaceFile[], lease: SandboxLease, dr
   if (root.exitCode !== 0) throw new Error('sandbox workspace root creation failed')
   const directories = new Set(files.map((file) => file.path.slice(0, file.path.lastIndexOf('/'))).filter((directory) => directory !== '/workspace'))
   for (const directory of [...directories].sort()) {
+    signal.throwIfAborted()
     const result = await driver.exec(lease, { command: ['mkdir', '-p', directory] }, signal)
     if (result.exitCode !== 0) throw new Error(`sandbox workspace directory creation failed: ${directory}`)
   }
-  for (const file of files) await driver.writeFile(lease, file.path, file.data)
+  for (const file of files) {
+    signal.throwIfAborted()
+    await driver.writeFile(lease, file.path, file.data)
+  }
 }
 
 type TarEntry = { name: string; type: string; data: Uint8Array }
