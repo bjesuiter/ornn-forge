@@ -372,6 +372,7 @@ async function runForceQuit(command: RunnerForceQuitCommand, context: {
     await stop()
     const remaining = await driver.discover({ runnerId: context.config.runnerId })
     if (remaining.some((sandbox) => sandbox.sandboxId === `sandbox_v1_${jobId}-${generation}`)) throw new Error('Job sandbox remains')
+    context.state.activeLeases = context.state.activeLeases.filter((lease) => lease.jobId !== jobId)
     context.state.sandboxes = context.state.sandboxes.filter((record) => record.jobId !== jobId)
     await context.stateStore.save(context.state)
     cleanupStatus = 'verified'
@@ -485,6 +486,7 @@ export async function executeDockerFixture(
 ): Promise<{ artifact: ReturnType<typeof fixtureArtifact>; cleanupStatus: 'verified' | 'failed' }> {
   const createdAt = (options.now ?? (() => new Date().toISOString()))()
   options.onObserved?.('execution_started')
+  let phase = 'sandbox_create'
   let sandbox: SandboxLease
   try {
     sandbox = await options.driver.create({
@@ -499,23 +501,28 @@ export async function executeDockerFixture(
       resources: { memoryBytes: 128 * 1024 * 1024, pidsLimit: 64 },
     }, signal)
   } catch (error) {
-    options.onObserved?.('execution_failed', errorCode(error))
+    options.onObserved?.('execution_failed', errorCode(error, phase))
     throw error
   }
   try {
+    phase = 'sandbox_record'
     await options.onSandboxCreated?.(sandbox)
     options.onObserved?.('sandbox_created')
+    phase = 'checkout'
     signal.throwIfAborted()
     if (!lease.checkout) throw new Error('Docker execution requires a pinned repository checkout')
     if (!options.importWorkspace) throw new Error('Docker execution is missing its repository workspace importer')
+    phase = 'workspace_import'
     options.onObserved?.('workspace_import_started')
     await options.importWorkspace(lease.checkout, sandbox, options.driver, signal)
     signal.throwIfAborted()
     options.onObserved?.('workspace_imported')
+    phase = 'fixture_execution'
     const result = await options.driver.exec(sandbox, { command: ['sh', '-ceu', "printf '{\"kind\":\"plan\"}\\n' > /workspace/fixture-artifact.json"] }, signal)
     signal.throwIfAborted()
     if (result.exitCode !== 0) throw new Error('Docker fixture command failed')
     options.onObserved?.('fixture_executed')
+    phase = 'artifact_collect'
     const files = await options.driver.collectArtifacts(sandbox, ['/workspace/fixture-artifact.json'])
     signal.throwIfAborted()
     if (new TextDecoder().decode(files.get('/workspace/fixture-artifact.json')) !== '{"kind":"plan"}\n') throw new Error('Docker fixture artifact was invalid')
@@ -531,7 +538,7 @@ export async function executeDockerFixture(
       return { artifact, cleanupStatus: 'failed' }
     }
   } catch (error) {
-    options.onObserved?.('execution_failed', errorCode(error))
+    options.onObserved?.('execution_failed', errorCode(error, phase))
     await options.driver.terminate(sandbox, 'failed').catch(() => undefined)
     const destroyed = await options.driver.destroy(sandbox).then(() => true, () => false)
     if (destroyed) await options.onSandboxCleaned?.(sandbox)
@@ -539,9 +546,9 @@ export async function executeDockerFixture(
   }
 }
 
-function errorCode(error: unknown): string {
+function errorCode(error: unknown, phase: string): string {
   if (error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string') return (error as { code: string }).code.slice(0, 100)
-  return 'runner.execution_failed'
+  return `runner.${phase}_failed`
 }
 
 export async function reconcileDockerSandboxes(state: RunnerControlState, driver: SandboxDriver, runnerId: string): Promise<void> {

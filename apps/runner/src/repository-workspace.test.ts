@@ -65,6 +65,19 @@ test('the trusted Runner rejects a GitHub archive containing a link before it re
   expect(sandboxTouched).toBe(false)
 })
 
+test('the Runner classifies an unsupported GitHub tar header without exposing archive content', async () => {
+  const importer = createRepositoryWorkspaceImporter({
+    fetch: async () => new Response(copyBytes(await gzip(tar([
+      { name: 'pax_global_header', type: 'g', body: 'comment=private-content' },
+    ])))),
+  })
+  const driver = new Proxy({} as SandboxDriver, { get() { throw new Error('sandbox must not be touched') } })
+
+  await expect(importer(checkout, lease, driver, new AbortController().signal)).rejects.toMatchObject({
+    code: 'runner.workspace.archive_entry_unsupported',
+  })
+})
+
 function tar(entries: Array<{ name: string; body?: string; type?: string; linkName?: string }>): Uint8Array {
   const chunks: Uint8Array[] = []
   for (const entry of entries) {

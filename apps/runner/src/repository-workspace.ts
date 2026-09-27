@@ -9,6 +9,10 @@ type Checkout = NonNullable<LeaseGrant['checkout']>
 type Fetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 type WorkspaceFile = { path: string; data: Uint8Array }
 
+export class RepositoryWorkspaceError extends Error {
+  readonly code = 'runner.workspace.archive_entry_unsupported'
+}
+
 export type RepositoryWorkspaceImporter = (
   checkout: Checkout,
   lease: SandboxLease,
@@ -77,7 +81,7 @@ async function archiveWorkspaceFiles(compressedArchive: Uint8Array): Promise<Wor
     const parts = safeArchivePath(entry.name)
     root ??= parts[0]
     if (parts[0] !== root) throw new Error('repository archive has multiple roots')
-    if (entry.type !== '0' && entry.type !== '\0' && entry.type !== '5') throw new Error(`unsafe tar entry: ${entry.type || 'unknown'}`)
+    if (entry.type !== '0' && entry.type !== '\0' && entry.type !== '5') throw new RepositoryWorkspaceError(`unsafe tar entry: ${entry.type || 'unknown'}`)
     if (entry.type === '5') continue
     if (parts.length < 2) throw new Error('repository archive file is outside its root directory')
     files.push({ path: `/workspace/${parts.slice(1).join('/')}`, data: entry.data })
