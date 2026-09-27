@@ -4,7 +4,7 @@ export type DashboardRunner = {
   enrollment: 'awaiting_setup' | 'enrolled'
   ready: boolean
   desiredCapacity: number
-  online: boolean
+  presence: 'online' | 'late' | 'offline'
   lastSeenAt?: string
   paused: boolean
   fault?: { code: string; occurredAt: string }
@@ -47,7 +47,8 @@ export type DashboardRunnerResult = {
   completedAt: string
 }
 
-const onlineWindowMs = 60_000
+const onlineWindowMs = 40_000
+const lateWindowMs = 90_000
 
 type DashboardRunnerRow = {
   runner_id: string
@@ -102,7 +103,6 @@ export async function listDashboardRunners(
   database: DashboardRunnerDatabase,
   now = new Date(),
 ): Promise<DashboardRunner[]> {
-  const onlineSince = new Date(now.getTime() - onlineWindowMs).toISOString()
   const [runners, activeJobs, completedJobs] = await Promise.all([
     database.prepare(`SELECT runner.runner_id, runner.label, runner.enrollment_state, runner.readiness_state, runner.desired_capacity,
       p.last_seen_at, COALESCE(paused.paused, 0) AS paused,
@@ -135,27 +135,33 @@ export async function listDashboardRunners(
       ORDER BY runner_id ASC, completed_at DESC, job_id DESC`).all<DashboardRunnerResultRow>(),
   ])
 
-  return dashboardRunnersFromRows(runners.results, onlineSince, activeJobs.results, completedJobs.results)
+  return dashboardRunnersFromRows(runners.results, now, activeJobs.results, completedJobs.results)
 }
 
 export function dashboardRunnersFromRows(
   rows: DashboardRunnerRow[],
-  onlineSince: string,
+  now: Date,
   activeRows: DashboardRunnerJobRow[] = [],
   completedRows: DashboardRunnerResultRow[] = [],
 ): DashboardRunner[] {
+  const onlineSince = new Date(now.getTime() - onlineWindowMs).toISOString()
+  const lateSince = new Date(now.getTime() - lateWindowMs).toISOString()
   const activeJobs = groupRows(activeRows, runnerJobFromRow)
   const completedJobs = groupRows(completedRows, runnerResultFromRow)
   return rows.map((runner) => {
     const recentJobs = completedJobs.get(runner.runner_id) ?? []
-    const online = runner.last_seen_at !== null && runner.last_seen_at >= onlineSince
+    let presence: DashboardRunner['presence'] = 'offline'
+    if (runner.last_seen_at !== null) {
+      if (runner.last_seen_at >= onlineSince) presence = 'online'
+      else if (runner.last_seen_at >= lateSince) presence = 'late'
+    }
     return {
       id: runner.runner_id,
       label: runner.label,
       enrollment: runner.enrollment_state,
-      ready: online && runner.readiness_state === 'ready',
+      ready: presence === 'online' && runner.readiness_state === 'ready',
       desiredCapacity: runner.desired_capacity,
-      online,
+      presence,
       lastSeenAt: runner.last_seen_at ?? undefined,
       paused: runner.paused === 1,
       fault: runner.fault_code === null || runner.fault_occurred_at === null

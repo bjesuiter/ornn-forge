@@ -1622,6 +1622,9 @@
 .fd-runner-presence.is-online {
   color: #a4c3ae;
 }
+.fd-runner-presence.is-late {
+  color: #e6c46a;
+}
 .fd-runner-presence.is-offline {
   color: var(--muted);
 }
@@ -2077,6 +2080,7 @@
 .fd-topology-runner-status { display: flex; flex-wrap: wrap; gap: 5px; }
 .fd-topology-runner-status span { padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font-size: 10px; line-height: 1.2; }
 .fd-topology-runner-status .is-online { color: #a4c3ae; border-color: #7a9c83; }
+.fd-topology-runner-status .is-late { color: #e6c46a; border-color: #e6c46a; }
 .fd-topology-runner-status .is-fault { color: #d38770; border-color: #a45c50; }
 .fd-topology-runner-facts { display: grid; gap: 8px; margin-top: 12px; }
 .fd-topology-runner-facts > div > span,

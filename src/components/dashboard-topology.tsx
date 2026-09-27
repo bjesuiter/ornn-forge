@@ -165,7 +165,7 @@ export function DashboardTopology({
     }
   }
 
-  const onlineCount = runners.filter((runner) => runner.online).length
+  const onlineCount = runners.filter((runner) => runner.presence === 'online').length
   const reservedCount = runners.reduce((count, runner) => count + runner.reservations, 0)
 
   return (
@@ -271,7 +271,7 @@ export function DashboardTopology({
                           <p className="fd-topology-runner-id">{runner.id}</p>
                         </div>
                         <div className="fd-topology-runner-status">
-                          <span className={runner.online ? 'is-online' : 'is-offline'}>{runner.online ? 'Online' : 'Offline'}</span>
+                          <span className={`is-${runner.presence}`}>{runner.presence === 'online' ? 'Online' : runner.presence === 'late' ? 'Heartbeat verspätet' : 'Offline'}</span>
                           {runner.enrollment === 'awaiting_setup' && <span>Setup ausstehend</span>}
                           {runner.paused && <span>Pausiert</span>}
                           {!runner.ready && <span>Nicht bereit</span>}
