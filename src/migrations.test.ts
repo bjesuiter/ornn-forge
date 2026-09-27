@@ -15,6 +15,7 @@ const runnerLabelsMigration = readFileSync(new URL('../migrations/0012_add_runne
 const dashboardReadModelsMigration = readFileSync(new URL('../migrations/0013_add_dashboard_read_models.sql', import.meta.url), 'utf8')
 const runnerDecommissioningMigration = readFileSync(new URL('../migrations/0014_add_runner_decommissioning.sql', import.meta.url), 'utf8')
 const forceQuitMigration = readFileSync(new URL('../migrations/0015_force_quit.sql', import.meta.url), 'utf8')
+const idleRunnerReadsMigration = readFileSync(new URL('../migrations/0016_bound_idle_runner_reads.sql', import.meta.url), 'utf8')
 
 test('the admission migration creates immutable provenance and append-only events', () => {
   const database = new Database(':memory:')
@@ -96,6 +97,7 @@ test('the fixture Runner migration stores only credential and lease digests', ()
   database.exec(dashboardReadModelsMigration)
   database.exec(runnerDecommissioningMigration)
   database.exec(forceQuitMigration)
+  database.exec(idleRunnerReadsMigration)
   expect(database.query("SELECT hardware_model FROM runner_profiles WHERE runner_id = 'runner_homeserv1'").get())
     .toEqual({ hardware_model: 'Nicht erkannt' })
   expect(database.query("SELECT label FROM remote_runners WHERE runner_id = 'runner_homeserv1'").get())
