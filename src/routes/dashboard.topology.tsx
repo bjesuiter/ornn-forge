@@ -1,28 +1,98 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { authClient } from '../auth-client'
 import { DashboardTopology } from '../components/dashboard-topology'
-import { getDashboardRunners } from '../dashboard.functions'
-import { dashboardRunnersQueryOptions } from '../dashboard-queries'
+import {
+  completeDashboardOpenAiSubscriptionAuthorization,
+  createDashboardRunner,
+  decommissionDashboardRunner,
+  disconnectDashboardOpenAiSubscription,
+  forceQuitDashboardJob,
+  getDashboardSnapshot,
+  setDashboardRunnerLabel,
+  setDashboardRunnerPaused,
+  startDashboardOpenAiSubscriptionAuthorization,
+} from '../dashboard.functions'
+import { dashboardSnapshotQueryOptions } from '../dashboard-queries'
+import type { RunnerDecommissionResult } from '../control-plane'
 
 export const Route = createFileRoute('/dashboard/topology')({
-  loader: () => getDashboardRunners(),
+  loader: () => getDashboardSnapshot(),
   component: DashboardTopologyRoute,
 })
 
 function DashboardTopologyRoute() {
   const navigate = useNavigate()
-  const initialRunners = Route.useLoaderData()
-  const { data: runners } = useQuery({
-    ...dashboardRunnersQueryOptions(),
-    initialData: initialRunners,
+  const queryClient = useQueryClient()
+  const initialDashboard = Route.useLoaderData()
+  const { data: { openAiUsage, runners, webhooks } } = useQuery({
+    ...dashboardSnapshotQueryOptions(),
+    initialData: initialDashboard,
   })
 
   async function signOut() {
     const result = await authClient.signOut()
     if (result.error) throw new Error('Sign out failed')
-    await navigate({ to: '/login', search: { error: undefined, returnTo: '/dashboard' } })
+    await navigate({
+      to: '/login',
+      search: { error: undefined, returnTo: '/dashboard' },
+    })
   }
 
-  return <DashboardTopology runners={runners} onSignOut={signOut} />
+  async function setRunnerPaused(runnerId: string, paused: boolean) {
+    await setDashboardRunnerPaused({ data: { runnerId, paused } })
+    await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+  }
+
+  async function forceQuitJob(jobId: string) {
+    await forceQuitDashboardJob({ data: { jobId } })
+    await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+  }
+
+  async function setRunnerLabel(runnerId: string, label: string) {
+    await setDashboardRunnerLabel({ data: { runnerId, label } })
+    await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+  }
+
+  async function createRunner(capacity: number) {
+    const created = await createDashboardRunner({ data: { capacity } })
+    await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    return created
+  }
+
+  async function decommissionRunner(runnerId: string, force: boolean): Promise<RunnerDecommissionResult> {
+    const result = await decommissionDashboardRunner({ data: { runnerId, force } })
+    if (result === 'decommissioned') await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    return result
+  }
+
+  async function startOpenAiSubscriptionAuthorization() {
+    await startDashboardOpenAiSubscriptionAuthorization()
+    await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+  }
+
+  async function completeOpenAiSubscriptionAuthorization() {
+    await completeDashboardOpenAiSubscriptionAuthorization()
+    await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+  }
+
+  async function disconnectOpenAiSubscription() {
+    await disconnectDashboardOpenAiSubscription()
+    await queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+  }
+
+  return <DashboardTopology
+    openAiUsage={openAiUsage}
+    runners={runners}
+    webhooks={webhooks}
+    onSignOut={signOut}
+    onSetRunnerPaused={setRunnerPaused}
+    onForceQuitJob={forceQuitJob}
+    onSetRunnerLabel={setRunnerLabel}
+    onCreateRunner={createRunner}
+    onDecommissionRunner={decommissionRunner}
+    onStartOpenAiSubscriptionAuthorization={startOpenAiSubscriptionAuthorization}
+    onCompleteOpenAiSubscriptionAuthorization={completeOpenAiSubscriptionAuthorization}
+    onDisconnectOpenAiSubscription={disconnectOpenAiSubscription}
+  />
 }
