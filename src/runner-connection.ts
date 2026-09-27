@@ -9,6 +9,15 @@ type Attachment = { runnerId: string; instanceId?: string; synchronized: boolean
 export class RunnerConnection extends DurableObject<Cloudflare.Env> {
   async fetch(request: Request): Promise<Response> {
     const runnerId = request.headers.get('x-ornn-runner-id')
+    if (request.method === 'POST' && new URL(request.url).pathname === '/command' && runnerId) {
+      const store = createD1InvocationStore(this.env.ORNN_D1)
+      const commands = await store.pendingRunnerCommands(runnerId)
+      for (const socket of this.ctx.getWebSockets()) {
+        const state = attachment(socket)
+        if (state?.runnerId === runnerId && state.synchronized) for (const command of commands) socket.send(JSON.stringify(envelope('runner.command', command)))
+      }
+      return new Response(null, { status: 204 })
+    }
     if (request.method !== 'GET' || request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return new Response('WebSocket upgrade required', { status: 426 })
     if (!runnerId) return new Response('Runner identity required', { status: 401 })
     const pair = new WebSocketPair()
@@ -35,6 +44,7 @@ export class RunnerConnection extends DurableObject<Cloudflare.Env> {
       await store.recordRunnerSuccess?.(state.runnerId)
       socket.serializeAttachment({ runnerId: state.runnerId, instanceId: parsed.value.payload.instanceId, synchronized: true } satisfies Attachment)
       socket.send(JSON.stringify(envelope('runner.synchronized', synchronized)))
+      for (const command of await store.pendingRunnerCommands(state.runnerId)) socket.send(JSON.stringify(envelope('runner.command', command)))
       await offerNextLease(socket, store, state.runnerId, this.env)
       return
     }
@@ -43,6 +53,7 @@ export class RunnerConnection extends DurableObject<Cloudflare.Env> {
       await store.recordRunnerHeartbeat?.(state.runnerId)
       await store.recordRunnerSuccess?.(state.runnerId)
       socket.send(JSON.stringify(envelope('runner.heartbeat.accepted', {})))
+      for (const command of await store.pendingRunnerCommands(state.runnerId)) socket.send(JSON.stringify(envelope('runner.command', command)))
       await offerNextLease(socket, store, state.runnerId, this.env)
       return
     }
@@ -93,6 +104,13 @@ export class RunnerConnection extends DurableObject<Cloudflare.Env> {
     if (parsed.value.type === 'runner.command.acknowledged' && isRunnerCommandJournalEntry(parsed.value.payload)) {
       const accepted = await store.acknowledgeRunnerCommand?.(state.runnerId, parsed.value.payload)
       socket.send(JSON.stringify(envelope(accepted ? 'runner.accepted' : 'lease.rejected', accepted ? {} : { code: 'runner_unauthorized' })))
+      return
+    }
+    if (parsed.value.type === 'runner.force_quit_result') {
+      const { commandId, jobId, cleanupStatus } = parsed.value.payload
+      const accepted = typeof commandId === 'string' && typeof jobId === 'string' && (cleanupStatus === 'verified' || cleanupStatus === 'failed')
+        && await store.completeForceQuit({ runnerId: state.runnerId, commandId, jobId, cleanupStatus })
+      socket.send(JSON.stringify(envelope(accepted ? 'runner.accepted' : 'lease.rejected', accepted ? {} : { code: 'lease_invalid' })))
       return
     }
     close(socket, 1008, 'Unsupported control message')

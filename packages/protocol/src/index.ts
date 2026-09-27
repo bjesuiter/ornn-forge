@@ -50,6 +50,8 @@ export type RunnerSynchronize = RunnerEnvelope<'runner.synchronize', RunnerSynch
 export type RunnerPresenceHeartbeat = RunnerEnvelope<'runner.heartbeat', { runnerId: string; instanceId: string }>
 export type RunnerLeaseAccept = RunnerEnvelope<'lease.accept', RunnerLeaseClaim & { runnerId: string }>
 export type RunnerLeaseObservation = RunnerEnvelope<'lease.observation', RunnerLeaseClaim & { runnerId: string; stage: RunnerLeaseStage; faultCode?: string }>
+export type RunnerForceQuitCommand = { commandId: string; type: 'force_quit'; payload: { jobId: string; generation: number } }
+export type RunnerForceQuitResult = RunnerEnvelope<'runner.force_quit_result', { runnerId: string; commandId: string; jobId: string; cleanupStatus: 'verified' | 'failed' }>
 export type RunnerCommandAcknowledgement = RunnerEnvelope<'runner.command.acknowledged', {
   runnerId: string
   commandId: string
@@ -83,6 +85,7 @@ export type RunnerResponse =
   | RunnerEnvelope<'protocol.unsupported', { supportedMajor: typeof RUNNER_PROTOCOL_MAJOR }>
 
 export type RunnerControlResponse =
+  | RunnerEnvelope<'runner.command', RunnerForceQuitCommand>
   | RunnerEnvelope<'runner.synchronized', {
     desiredConfiguration: RunnerDesiredConfiguration
     activeLeases: Array<{ jobId: string; accepted: boolean }>

@@ -10,6 +10,11 @@ export function createCloudflareControlPlane(env: Cloudflare.Env) {
     githubRepositoryFullName: env.GITHUB_REPOSITORY_FULL_NAME,
     operatorBearerSecret: env.OPERATOR_BEARER_SECRET,
     runnerConnection: { connect: (runnerId, request) => env.RUNNER_CONNECTION.getByName(runnerId).fetch(request) },
+    notifyRunner: async (runnerId) => {
+      await env.RUNNER_CONNECTION.getByName(runnerId).fetch(new Request('https://runner.internal/command', {
+        method: 'POST', headers: { 'x-ornn-runner-id': runnerId },
+      }))
+    },
     messagePublisher: createGitHubMessagePublisher({
       appId: env.GITHUB_APP_ID,
       privateKey: env.GITHUB_APP_PRIVATE_KEY,

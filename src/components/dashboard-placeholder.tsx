@@ -16,6 +16,7 @@ export function Dashboard({
   webhooks,
   onSignOut,
   onSetRunnerPaused,
+  onForceQuitJob,
   onSetRunnerLabel,
   onCreateRunner,
   onDecommissionRunner,
@@ -28,6 +29,7 @@ export function Dashboard({
   webhooks: DashboardWebhook[]
   onSignOut: () => Promise<void>
   onSetRunnerPaused: (runnerId: string, paused: boolean) => Promise<void>
+  onForceQuitJob: (jobId: string) => Promise<void>
   onSetRunnerLabel: (runnerId: string, label: string) => Promise<void>
   onCreateRunner: (capacity: number) => Promise<{ runner: RemoteRunner; setupToken: string }>
   onDecommissionRunner: (runnerId: string, force: boolean) => Promise<RunnerDecommissionResult>
@@ -36,6 +38,7 @@ export function Dashboard({
   onDisconnectOpenAiSubscription: () => Promise<void>
 }) {
   const [updatingRunnerId, setUpdatingRunnerId] = useState<string>()
+  const [forceQuittingJobId, setForceQuittingJobId] = useState<string>()
   const [decommissioningRunnerId, setDecommissioningRunnerId] = useState<string>()
   const [editingRunnerId, setEditingRunnerId] = useState<string>()
   const [runnerLabel, setRunnerLabel] = useState('')
@@ -77,6 +80,19 @@ export function Dashboard({
       setRunnerError('Runner konnte nicht aktualisiert werden. Bitte versuche es erneut.')
     } finally {
       setUpdatingRunnerId(undefined)
+    }
+  }
+
+  async function forceQuitJob(job: DashboardRunner['activeJobs'][number]) {
+    if (!window.confirm(`Job ${job.id} wirklich per Force Quit abbrechen?\n\nDer Slot wird erst nach verifizierter Sandbox-Bereinigung frei.`)) return
+    setForceQuittingJobId(job.id)
+    setRunnerError(undefined)
+    try {
+      await onForceQuitJob(job.id)
+    } catch {
+      setRunnerError(`Force Quit für ${job.id} konnte nicht angefordert werden.`)
+    } finally {
+      setForceQuittingJobId(undefined)
     }
   }
 
@@ -358,9 +374,9 @@ export function Dashboard({
                   </div>
                   <div className="fd-runner-details">
                     <section className="fd-runner-detail">
-                      <span>Aktuelle Arbeit</span>
+                      <span>Belegte Slots</span>
                       {runner.activeJobs.length === 0 ? (
-                        <strong>Keine aktive Arbeit</strong>
+                        <strong>Keine belegten Slots</strong>
                       ) : (
                         <ul className="fd-runner-job-list">
                           {runner.activeJobs.map((job) => (
@@ -372,6 +388,15 @@ export function Dashboard({
                                 {job.id} · Lease {job.generation} · läuft {elapsed(job.startedAt)} · Heartbeat {relativeTime(job.lastHeartbeatAt)}
                               </small>
                               <small>Lease läuft ab {dateTime(job.expiresAt)}</small>
+                              {job.forceQuitCompletedAt ? (
+                                <small>Force Quit abgeschlossen, Bereinigung fehlgeschlagen. Slot bleibt belegt.</small>
+                              ) : job.forceQuitRequestedAt ? (
+                                <small>Force Quit angefordert, Runner-Antwort ausstehend.</small>
+                              ) : (
+                                <button className="fd-runner-force-quit" type="button" onClick={() => void forceQuitJob(job)} disabled={forceQuittingJobId === job.id}>
+                                  {forceQuittingJobId === job.id ? 'Fordert an …' : 'Force Quit'}
+                                </button>
+                              )}
                             </li>
                           ))}
                         </ul>

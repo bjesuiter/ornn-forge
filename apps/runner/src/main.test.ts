@@ -242,6 +242,95 @@ test('the Runner persists a lease before accepting and completing it', async () 
   expect(socket.sent.slice(-3).map((message) => JSON.parse(message).type)).toEqual(['lease.accept', 'lease.heartbeat', 'lease.result'])
 })
 
+test('Force Quit aborts active work, removes its sandbox, and sends no normal result', async () => {
+  const controller = new AbortController()
+  const calls: string[] = []
+  const jobId = 'job_v1_forcequit'
+  const sandbox: SandboxLease = {
+    sandboxId: `sandbox_v1_${jobId}-1`, generation: 1, runnerId: 'runner_homeserv1', providerRef: 'container-forcequit',
+    specFingerprint: 'docker-fixture-v1', createdAt: '2026-09-07T12:00:00.000Z', expiresAt: '2026-09-07T12:15:00.000Z', volumeIds: [],
+  }
+  let present = true
+  const driver: SandboxDriver = {
+    async create() { return sandbox },
+    async discover() { return present ? [sandbox] : [] },
+    async inspect() { return { state: 'absent', observedAt: '' } },
+    async exec() { throw new Error('not used') },
+    async readFile() { throw new Error('not used') },
+    async writeFile() { throw new Error('not used') },
+    async collectArtifacts() { return new Map() },
+    async terminate(_sandbox, reason) { calls.push(`terminate:${reason}`) },
+    async destroy() { calls.push('destroy'); present = false },
+  }
+  class ForceQuitSocket extends FixtureSocket {
+    override send(message: string): void {
+      super.send(message)
+      if (JSON.parse(message).type === 'runner.force_quit_result') {
+        controller.abort()
+        this.close()
+      }
+    }
+  }
+  const socket = new ForceQuitSocket()
+  await runRemoteRunner({ controlPlaneUrl: 'https://control.test', runnerId: 'runner_homeserv1', credential: 'r'.repeat(32), profile }, {
+    signal: controller.signal, forceQuitDriver: () => driver,
+    stateStore: { async load() { return { activeLeases: [], commandJournal: [], sandboxes: [] } }, async save() {}, async markSynchronized() {} },
+    createSocket() { queueMicrotask(() => socket.emit('open')); return socket },
+    executeLease: async (_lease, signal) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => { calls.push('abort'); reject(new Error('aborted')) }, { once: true })
+    }),
+    onSynchronized() {
+      socket.emit('message', JSON.stringify(envelope('runner.lease', {
+        jobId, leaseToken: 'lease_v1_forcequit', generation: 1, expiresAt: '2026-09-07T12:15:00.000Z',
+        repository: { fullName: 'bjesuiter/ornn-forge' }, workOrder: { issueNumber: 1, title: 'Fixture', body: '', comment: '@ornn' },
+      })))
+      setTimeout(() => socket.emit('message', JSON.stringify(envelope('runner.command', {
+        commandId: 'command_forcequit', type: 'force_quit', payload: { jobId, generation: 1 },
+      }))), 0)
+    },
+  })
+  expect(calls).toEqual(['abort', 'terminate:cancelled', 'destroy'])
+  expect(socket.sent.map((message) => JSON.parse(message).type)).not.toContain('lease.result')
+  expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+    type: 'runner.force_quit_result', payload: { jobId, cleanupStatus: 'verified' },
+  })
+})
+
+test('Force Quit verifies an old leased job with no local work or Docker sandbox', async () => {
+  const controller = new AbortController()
+  const driver: SandboxDriver = {
+    async create() { throw new Error('not used') },
+    async discover() { return [] },
+    async inspect() { return { state: 'absent', observedAt: '' } },
+    async exec() { throw new Error('not used') },
+    async readFile() { throw new Error('not used') },
+    async writeFile() { throw new Error('not used') },
+    async collectArtifacts() { return new Map() },
+    async terminate() { throw new Error('not used') },
+    async destroy() { throw new Error('not used') },
+  }
+  class StaleJobSocket extends FixtureSocket {
+    override send(message: string): void {
+      super.send(message)
+      if (JSON.parse(message).type === 'runner.force_quit_result') { controller.abort(); this.close() }
+    }
+  }
+  const socket = new StaleJobSocket()
+  await runRemoteRunner({ controlPlaneUrl: 'https://control.test', runnerId: 'runner_homeserv1', credential: 'r'.repeat(32), profile }, {
+    signal: controller.signal, forceQuitDriver: () => driver,
+    stateStore: { async load() { return { activeLeases: [], commandJournal: [], sandboxes: [] } }, async save() {}, async markSynchronized() {} },
+    createSocket() { queueMicrotask(() => socket.emit('open')); return socket },
+    onSynchronized() {
+      socket.emit('message', JSON.stringify(envelope('runner.command', {
+        commandId: 'command_old_job', type: 'force_quit', payload: { jobId: 'job_v1_old', generation: 1 },
+      })))
+    },
+  })
+  expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+    type: 'runner.force_quit_result', payload: { jobId: 'job_v1_old', cleanupStatus: 'verified' },
+  })
+})
+
 test('the Runner reconnect delay is bounded exponential backoff with jitter', () => {
   expect(reconnectDelay(0, () => 0)).toBe(188)
   expect(reconnectDelay(1, () => 1)).toBe(625)
