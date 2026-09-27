@@ -128,6 +128,22 @@ _Avoid_: Control-plane worker, local Runner
 An independently deployed Runner that receives job leases from the control plane.
 _Avoid_: Runner daemon, worker, agent
 
+**Runner host**:
+The execution environment for one Remote Runner instance. A Runner host may be a system service on a machine or a Runner container; it is not job isolation.
+_Avoid_: Sandbox, Job container
+
+**Runner test harness**:
+A disposable local setup that runs a Remote Runner in a Runner container while exercising its control connection and sandbox lifecycle. It is not a production deployment or a Job sandbox.
+_Avoid_: Docker sandbox, local Runner
+
+**Runner container**:
+The Docker container that hosts the Remote Runner in the Runner test harness. It is a Runner host and can create Job containers through the host Docker Engine; it is never a Job sandbox.
+_Avoid_: Sandbox, Job container, Docker container
+
+**Job container**:
+A Docker realization of one Job's Sandbox. In the Docker topology it is a sibling of the Runner container, not a child inside it.
+_Avoid_: Runner container, Docker container
+
 **Runner control connection**:
 A reconnectable, header-authenticated real-time connection from one Remote Runner to the control plane for its running protocol, including lease, report, profile, and command messages. At most one execution connection is active for a Runner identity; an update handover may additionally hold one draining and one candidate connection. It is not the durable source of Runner or command state.
 _Avoid_: Polling channel, Runner identity
@@ -249,5 +265,5 @@ A replaceable component through which a Runner manages sandbox lifecycle, proces
 _Avoid_: Sandbox provider, sandbox runner
 
 **Sandbox**:
-An isolated, writable execution environment assigned to one job and never reused by another. Its workspace may survive a Runner restart so the job can recover, but it is removed during verified sandbox teardown.
-_Avoid_: Runner, container
+An isolated, writable execution environment assigned to one Job and never reused by another. A Docker-backed Sandbox is a Job container; its workspace may survive a Runner restart so the Job can recover, but it is removed during verified sandbox teardown.
+_Avoid_: Runner, Runner container, Docker container
