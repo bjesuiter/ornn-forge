@@ -10,7 +10,8 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "strict": true,
-    "noEmit": true
+    "noEmit": true,
+    "paths": { "@/*": ["./src/*"] }
   },
   "include": ["src", "apps", "packages", "scripts", "vite.config.ts", "wrangler.jsonc", "worker-configuration.d.ts"]
 }

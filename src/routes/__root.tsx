@@ -6,6 +6,7 @@ import {
   Outlet,
   Scripts,
 } from '@tanstack/react-router'
+import '../shadcn.css'
 import './styles.css'
 
 export const Route = createRootRoute({

@@ -4,6 +4,17 @@ import type { DashboardRunner } from '../dashboard-runners'
 import type { DashboardWebhook } from '../dashboard-webhooks'
 import type { OpenAiSubscriptionUsage } from '../openai-subscription-usage'
 import { DashboardHeader } from './dashboard-header'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from './ui/alert-dialog'
 import './forge-designs.css'
 
 const setupTokenLifetimeMs = 15 * 60_000
@@ -16,6 +27,7 @@ export function Dashboard({
   webhooks,
   onSignOut,
   onSetRunnerPaused,
+  onForceQuitJob,
   onSetRunnerLabel,
   onCreateRunner,
   onDecommissionRunner,
@@ -28,6 +40,7 @@ export function Dashboard({
   webhooks: DashboardWebhook[]
   onSignOut: () => Promise<void>
   onSetRunnerPaused: (runnerId: string, paused: boolean) => Promise<void>
+  onForceQuitJob: (jobId: string) => Promise<void>
   onSetRunnerLabel: (runnerId: string, label: string) => Promise<void>
   onCreateRunner: (capacity: number) => Promise<{ runner: RemoteRunner; setupToken: string }>
   onDecommissionRunner: (runnerId: string, force: boolean) => Promise<RunnerDecommissionResult>
@@ -36,6 +49,9 @@ export function Dashboard({
   onDisconnectOpenAiSubscription: () => Promise<void>
 }) {
   const [updatingRunnerId, setUpdatingRunnerId] = useState<string>()
+  const [forceQuittingJobId, setForceQuittingJobId] = useState<string>()
+  const [forceQuitDialogJobId, setForceQuitDialogJobId] = useState<string>()
+  const [forceQuitError, setForceQuitError] = useState(false)
   const [decommissioningRunnerId, setDecommissioningRunnerId] = useState<string>()
   const [editingRunnerId, setEditingRunnerId] = useState<string>()
   const [runnerLabel, setRunnerLabel] = useState('')
@@ -77,6 +93,19 @@ export function Dashboard({
       setRunnerError('Runner konnte nicht aktualisiert werden. Bitte versuche es erneut.')
     } finally {
       setUpdatingRunnerId(undefined)
+    }
+  }
+
+  async function forceQuitJob(job: DashboardRunner['activeJobs'][number]) {
+    setForceQuittingJobId(job.id)
+    setForceQuitError(false)
+    try {
+      await onForceQuitJob(job.id)
+      setForceQuitDialogJobId(undefined)
+    } catch {
+      setForceQuitError(true)
+    } finally {
+      setForceQuittingJobId(undefined)
     }
   }
 
@@ -369,9 +398,9 @@ export function Dashboard({
                   </div>
                   <div className="fd-runner-details">
                     <section className="fd-runner-detail">
-                      <span>Aktuelle Arbeit</span>
+                      <span>Belegte Slots</span>
                       {runner.activeJobs.length === 0 ? (
-                        <strong>Keine aktive Arbeit</strong>
+                        <strong>Keine belegten Slots</strong>
                       ) : (
                         <ul className="fd-runner-job-list">
                           {runner.activeJobs.map((job) => (
@@ -383,6 +412,35 @@ export function Dashboard({
                                 {job.id} · Lease {job.generation} · läuft {elapsed(job.startedAt)} · Heartbeat {relativeTime(job.lastHeartbeatAt)}
                               </small>
                               <small>Lease läuft ab {dateTime(job.expiresAt)}</small>
+                              {job.forceQuitCompletedAt ? (
+                                <small>Force Quit abgeschlossen, Bereinigung fehlgeschlagen. Slot bleibt belegt.</small>
+                              ) : job.forceQuitRequestedAt ? (
+                                <small>Force Quit angefordert, Runner-Antwort ausstehend.</small>
+                              ) : (
+                                <AlertDialog open={forceQuitDialogJobId === job.id} onOpenChange={(open) => {
+                                  setForceQuitDialogJobId(open ? job.id : undefined)
+                                  setForceQuitError(false)
+                                }}>
+                                  <AlertDialogTrigger render={<button className="fd-runner-force-quit" type="button" disabled={forceQuittingJobId === job.id} />}>
+                                    Force Quit
+                                  </AlertDialogTrigger>
+                                  <AlertDialogContent>
+                                    <AlertDialogHeader>
+                                      <AlertDialogTitle>Job per Force Quit beenden?</AlertDialogTitle>
+                                      <AlertDialogDescription>
+                                        Job {job.id} wird abgebrochen. Der Slot wird erst nach verifizierter Sandbox-Bereinigung frei.
+                                      </AlertDialogDescription>
+                                      {forceQuitError && <p className="text-sm text-destructive" role="alert">Force Quit konnte nicht angefordert werden. Bitte erneut versuchen.</p>}
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                      <AlertDialogCancel disabled={forceQuittingJobId === job.id}>Abbrechen</AlertDialogCancel>
+                                      <AlertDialogAction variant="destructive" disabled={forceQuittingJobId === job.id} onClick={() => void forceQuitJob(job)}>
+                                        {forceQuittingJobId === job.id ? 'Fordert an …' : 'Force Quit'}
+                                      </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                  </AlertDialogContent>
+                                </AlertDialog>
+                              )}
                             </li>
                           ))}
                         </ul>

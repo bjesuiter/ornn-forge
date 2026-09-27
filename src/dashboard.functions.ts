@@ -78,6 +78,23 @@ export const setDashboardRunnerPaused = createServerFn({ method: 'POST' })
     if (!updated) throw new Error('Runner not found')
   })
 
+export const forceQuitDashboardJob = createServerFn({ method: 'POST' })
+  .validator((data: unknown) => {
+    if (typeof data !== 'object' || data === null || !('jobId' in data) || typeof data.jobId !== 'string' || !/^job_[a-zA-Z0-9_-]{1,200}$/.test(data.jobId)) {
+      throw new Error('Invalid job ID')
+    }
+    return { jobId: data.jobId }
+  })
+  .handler(async ({ data }) => {
+    await requireDashboardSession()
+    const result = await createD1InvocationStore(env.ORNN_D1).requestForceQuit(data.jobId)
+    if (!('runnerId' in result)) throw new Error(result.state === 'not_found' ? 'Job not found' : 'Job is already finished')
+    await env.RUNNER_CONNECTION.getByName(result.runnerId).fetch(new Request('https://runner-connection.internal/command', {
+      method: 'POST', headers: { 'x-ornn-runner-id': result.runnerId },
+    })).catch(() => undefined)
+    return result.state
+  })
+
 export const setDashboardRunnerLabel = createServerFn({ method: 'POST' })
   .validator((data: unknown) => {
     if (!isLabelRequest(data)) throw new Error('Invalid Runner label request')

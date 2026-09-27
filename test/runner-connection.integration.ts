@@ -8,6 +8,7 @@ import { offerNextLease } from '../src/runner-connection'
 const runnerId = 'runner_v1_abcdefghijklmnopqrstuv'
 const recoveringRunnerId = 'runner_v1_zyxwvutsrqponmlkjihgfe'
 const decommissionedRunnerId = 'runner_v1_decommissioned00000000'
+const forceQuitRunnerId = 'runner_v1_forcequit0000000000000'
 const profile = {
   release: 'test', platform: 'linux', architecture: 'arm64', runtime: 'workerd', executor: 'fixture', hardwareModel: 'Test host', capacity: 1,
   logicalCpuCount: 1, memoryLimitBytes: 134_217_728,
@@ -64,6 +65,51 @@ test('a fresh Runner connection recovers D1-authoritative configuration and comm
     type: 'runner.synchronized',
     payload: { desiredConfiguration: { paused: true, capacity: 2 }, pendingCommands: [{ commandId: 'command_v1_recover' }] },
   })
+  socket.close(1000, 'test complete')
+})
+
+test('D1 persists Force Quit and delivers it through the Runner connection', async () => {
+  const now = new Date().toISOString()
+  const jobId = 'job_v1_forcequit_integration'
+  const leaseToken = 'lease-forcequit-integration'
+  const tokenDigest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(leaseToken)))]
+    .map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  await env.ORNN_D1.prepare(`INSERT INTO remote_runners (runner_id, kind, desired_capacity, enrollment_state, readiness_state, created_at)
+    VALUES (?, 'remote', 1, 'enrolled', 'ready', ?)`).bind(forceQuitRunnerId, now).run()
+  await env.ORNN_D1.prepare('INSERT INTO runner_credentials VALUES (?, ?, ?)').bind(forceQuitRunnerId, 'digest', now).run()
+  await env.ORNN_D1.prepare(`INSERT INTO jobs (job_id, state, cleanup_status, created_at, invocation_id)
+    VALUES (?, 'leased', 'pending', ?, 'inv_forcequit')`).bind(jobId, now).run()
+  await env.ORNN_D1.prepare('INSERT INTO runner_leases VALUES (?, ?, 1, ?, ?, ?, ?)')
+    .bind(jobId, forceQuitRunnerId, tokenDigest, new Date(Date.now() + 60_000).toISOString(), now, now).run()
+
+  const socket = await connect(exports.default, forceQuitRunnerId)
+  const synchronized = nextMessage(socket)
+  socket.send(JSON.stringify(envelope('runner.synchronize', {
+    runnerId: forceQuitRunnerId, instanceId: 'instance_v1_forcequit0000000000000', profile, activeLeases: [], commandJournal: [],
+  })))
+  expect((await synchronized).type).toBe('runner.synchronized')
+
+  const store = createD1InvocationStore(env.ORNN_D1)
+  expect(await store.requestForceQuit(jobId)).toMatchObject({ state: 'requested', runnerId: forceQuitRunnerId })
+  expect(await store.requestForceQuit(jobId)).toMatchObject({ state: 'already_requested' })
+  expect(await store.completeLease({
+    runnerId: forceQuitRunnerId, jobId, leaseToken,
+    artifact: { schemaVersion: 1, kind: 'plan', summary: 'Too late', details: 'Should be fenced.' }, cleanupStatus: 'verified',
+  })).toBe('invalid_artifact')
+  const command = nextMessage(socket)
+  await env.RUNNER_CONNECTION.getByName(forceQuitRunnerId).fetch(new Request('https://runner.internal/command', {
+    method: 'POST', headers: { 'x-ornn-runner-id': forceQuitRunnerId },
+  }))
+  const delivered = await command as { type: string; payload: { commandId: string; payload: { jobId: string } } }
+  expect(delivered).toMatchObject({ type: 'runner.command', payload: { payload: { jobId } } })
+  const accepted = nextMessage(socket)
+  socket.send(JSON.stringify(envelope('runner.force_quit_result', {
+    runnerId: forceQuitRunnerId, commandId: delivered.payload.commandId, jobId, cleanupStatus: 'verified',
+  })))
+  expect((await accepted).type).toBe('runner.accepted')
+  expect(await env.ORNN_D1.prepare('SELECT execution_status, cleanup_status, force_quit_completed_at FROM jobs WHERE job_id = ?')
+    .bind(jobId).first()).toMatchObject({ execution_status: 'cancelled', cleanup_status: 'verified', force_quit_completed_at: expect.any(String) })
+  expect(await store.pendingRunnerCommands(forceQuitRunnerId)).toEqual([])
   socket.close(1000, 'test complete')
 })
 
@@ -156,8 +202,9 @@ async function createControlStateSchema(): Promise<void> {
     env.ORNN_D1.prepare('CREATE TABLE runner_pauses (runner_id TEXT PRIMARY KEY, paused INTEGER, updated_at TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE runner_commands (command_id TEXT PRIMARY KEY, runner_id TEXT, command_type TEXT, payload_json TEXT, created_at TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE runner_command_journal (runner_id TEXT, command_id TEXT, state TEXT, reported_at TEXT, PRIMARY KEY (runner_id, command_id))'),
-    env.ORNN_D1.prepare('CREATE TABLE jobs (job_id TEXT PRIMARY KEY, state TEXT, cleanup_status TEXT, created_at TEXT, invocation_id TEXT)'),
+    env.ORNN_D1.prepare('CREATE TABLE jobs (job_id TEXT PRIMARY KEY, state TEXT, cleanup_status TEXT, created_at TEXT, invocation_id TEXT, force_quit_requested_at TEXT, force_quit_completed_at TEXT, force_quit_command_id TEXT, execution_status TEXT, execution_completed_at TEXT, cleanup_updated_at TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE runner_leases (job_id TEXT PRIMARY KEY, runner_id TEXT, generation INTEGER, token_digest TEXT, expires_at TEXT, last_heartbeat_at TEXT, created_at TEXT)'),
     env.ORNN_D1.prepare('CREATE TABLE invocations (invocation_id TEXT PRIMARY KEY, github_repository_full_name TEXT, github_issue_number INTEGER, github_issue_title TEXT, github_issue_body TEXT, github_comment_body TEXT)'),
+    env.ORNN_D1.prepare('CREATE TABLE domain_events (event_id TEXT PRIMARY KEY, schema_version INTEGER, stream_kind TEXT, stream_id TEXT, revision INTEGER, event_type TEXT, payload_json TEXT, payload_sha256 TEXT, created_at TEXT)'),
   ])
 }
