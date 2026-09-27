@@ -4,6 +4,17 @@ import type { DashboardRunner } from '../dashboard-runners'
 import type { DashboardWebhook } from '../dashboard-webhooks'
 import type { OpenAiSubscriptionUsage } from '../openai-subscription-usage'
 import { DashboardHeader } from './dashboard-header'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from './ui/alert-dialog'
 import './forge-designs.css'
 
 const setupTokenLifetimeMs = 15 * 60_000
@@ -39,6 +50,8 @@ export function Dashboard({
 }) {
   const [updatingRunnerId, setUpdatingRunnerId] = useState<string>()
   const [forceQuittingJobId, setForceQuittingJobId] = useState<string>()
+  const [forceQuitDialogJobId, setForceQuitDialogJobId] = useState<string>()
+  const [forceQuitError, setForceQuitError] = useState(false)
   const [decommissioningRunnerId, setDecommissioningRunnerId] = useState<string>()
   const [editingRunnerId, setEditingRunnerId] = useState<string>()
   const [runnerLabel, setRunnerLabel] = useState('')
@@ -84,13 +97,13 @@ export function Dashboard({
   }
 
   async function forceQuitJob(job: DashboardRunner['activeJobs'][number]) {
-    if (!window.confirm(`Job ${job.id} wirklich per Force Quit abbrechen?\n\nDer Slot wird erst nach verifizierter Sandbox-Bereinigung frei.`)) return
     setForceQuittingJobId(job.id)
-    setRunnerError(undefined)
+    setForceQuitError(false)
     try {
       await onForceQuitJob(job.id)
+      setForceQuitDialogJobId(undefined)
     } catch {
-      setRunnerError(`Force Quit für ${job.id} konnte nicht angefordert werden.`)
+      setForceQuitError(true)
     } finally {
       setForceQuittingJobId(undefined)
     }
@@ -393,9 +406,29 @@ export function Dashboard({
                               ) : job.forceQuitRequestedAt ? (
                                 <small>Force Quit angefordert, Runner-Antwort ausstehend.</small>
                               ) : (
-                                <button className="fd-runner-force-quit" type="button" onClick={() => void forceQuitJob(job)} disabled={forceQuittingJobId === job.id}>
-                                  {forceQuittingJobId === job.id ? 'Fordert an …' : 'Force Quit'}
-                                </button>
+                                <AlertDialog open={forceQuitDialogJobId === job.id} onOpenChange={(open) => {
+                                  setForceQuitDialogJobId(open ? job.id : undefined)
+                                  setForceQuitError(false)
+                                }}>
+                                  <AlertDialogTrigger render={<button className="fd-runner-force-quit" type="button" disabled={forceQuittingJobId === job.id} />}>
+                                    Force Quit
+                                  </AlertDialogTrigger>
+                                  <AlertDialogContent>
+                                    <AlertDialogHeader>
+                                      <AlertDialogTitle>Job per Force Quit beenden?</AlertDialogTitle>
+                                      <AlertDialogDescription>
+                                        Job {job.id} wird abgebrochen. Der Slot wird erst nach verifizierter Sandbox-Bereinigung frei.
+                                      </AlertDialogDescription>
+                                      {forceQuitError && <p className="text-sm text-destructive" role="alert">Force Quit konnte nicht angefordert werden. Bitte erneut versuchen.</p>}
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                      <AlertDialogCancel disabled={forceQuittingJobId === job.id}>Abbrechen</AlertDialogCancel>
+                                      <AlertDialogAction variant="destructive" disabled={forceQuittingJobId === job.id} onClick={() => void forceQuitJob(job)}>
+                                        {forceQuittingJobId === job.id ? 'Fordert an …' : 'Force Quit'}
+                                      </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                  </AlertDialogContent>
+                                </AlertDialog>
                               )}
                             </li>
                           ))}

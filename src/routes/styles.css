@@ -1,7 +1,6 @@
 :root {
   color: #17201b;
   background: #f4efe4;
-  font-family: Georgia, 'Times New Roman', serif;
 }
 
 * {
@@ -22,6 +21,7 @@ body {
   min-height: 100vh;
   place-items: center;
   padding: 2rem;
+  font-family: Georgia, 'Times New Roman', serif;
 }
 
 .panel {
@@ -43,7 +43,7 @@ body {
   text-transform: uppercase;
 }
 
-h1 {
+.shell h1 {
   margin: 0;
   max-width: 11ch;
   font-size: clamp(3rem, 12vw, 6rem);
@@ -51,7 +51,7 @@ h1 {
   line-height: 0.88;
 }
 
-p {
+.shell p {
   max-width: 34rem;
   font-size: clamp(1rem, 2vw, 1.2rem);
   line-height: 1.65;
