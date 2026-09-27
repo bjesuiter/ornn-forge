@@ -1636,7 +1636,7 @@
   line-height: 1;
   padding: 4px 7px;
 }
-.fd-runner-enrollment.is-awaiting_setup,
+.fd-runner-enrollment,
 .fd-runner-readiness.is-not-ready {
   border-color: var(--muted);
   color: var(--muted);
