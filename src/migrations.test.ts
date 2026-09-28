@@ -16,7 +16,7 @@ const dashboardReadModelsMigration = readFileSync(new URL('../migrations/0013_ad
 const runnerDecommissioningMigration = readFileSync(new URL('../migrations/0014_add_runner_decommissioning.sql', import.meta.url), 'utf8')
 const forceQuitMigration = readFileSync(new URL('../migrations/0015_force_quit.sql', import.meta.url), 'utf8')
 const idleRunnerReadsMigration = readFileSync(new URL('../migrations/0016_bound_idle_runner_reads.sql', import.meta.url), 'utf8')
-const leaseCheckoutsMigration = readFileSync(new URL('../migrations/0017_record_lease_checkouts.sql', import.meta.url), 'utf8')
+const leaseCheckoutsMigration = readFileSync(new URL('../migrations/0018_record_lease_checkouts.sql', import.meta.url), 'utf8')
 
 test('the admission migration creates immutable provenance and append-only events', () => {
   const database = new Database(':memory:')
