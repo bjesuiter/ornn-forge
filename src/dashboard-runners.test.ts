@@ -15,6 +15,7 @@ const migrations = [
   '0013_add_dashboard_read_models.sql',
   '0014_add_runner_decommissioning.sql',
   '0015_force_quit.sql',
+  '0017_bound_dashboard_runner_reads.sql',
 ].map((name) => readFileSync(new URL(`../migrations/${name}`, import.meta.url), 'utf8'))
 
 test('the dashboard keeps runner presence, pause, faults, capacity, and work as independent dimensions', () => {
@@ -119,6 +120,16 @@ test('the dashboard query keeps enrollment, readiness, and presence separate', a
     database.run(`INSERT INTO runner_leases VALUES ('job_${suffix}', 'runner_enrolled', 1, 'digest',
       '2026-09-06T12:00:30.000Z', '2026-09-06T11:58:00.000Z', '2026-09-06T11:50:00.000Z')`)
   }
+  database.run(`INSERT INTO invocations VALUES (
+    'inv_succeeded', 1, 'delivery_succeeded', '42', '99', 'bjesuiter/ornn-forge', 23,
+    'Keep reservation', '', 'comment_succeeded', '', 'bjesuiter', '{}', 'policy', '2026-09-06T11:50:00.000Z'
+  )`)
+  database.run(`INSERT INTO jobs (job_id, schema_version, invocation_id, state, flow_id, flow_version_id, policy_version_id,
+    created_at, execution_status, execution_completed_at, cleanup_status)
+    VALUES ('job_succeeded', 1, 'inv_succeeded', 'succeeded', 'analyze', 'flow', 'policy',
+    '2026-09-06T11:50:00.000Z', 'succeeded', '2026-09-06T11:59:00.000Z', 'failed')`)
+  database.run(`INSERT INTO runner_leases VALUES ('job_succeeded', 'runner_enrolled', 1, 'digest',
+    '2026-09-06T12:00:30.000Z', '2026-09-06T11:58:00.000Z', '2026-09-06T11:50:00.000Z')`)
 
   const runners = await listDashboardRunners(sqliteDashboardDatabase(database), new Date('2026-09-06T12:00:05.000Z'))
 
@@ -130,7 +141,7 @@ test('the dashboard query keeps enrollment, readiness, and presence separate', a
   const betweenHeartbeats = await listDashboardRunners(sqliteDashboardDatabase(database), new Date('2026-09-06T12:00:24.000Z'))
   expect(betweenHeartbeats.find((runner) => runner.id === 'runner_enrolled')).toMatchObject({ ready: true, online: true })
   expect(runners.find((runner) => runner.id === 'runner_enrolled')).toMatchObject({
-    reservations: 1, activeJobs: [{ id: 'job_failed', forceQuitCompletedAt: '2026-09-06T11:59:00.000Z', cleanupStatus: 'failed' }],
+    reservations: 2, activeJobs: [{ id: 'job_failed', forceQuitCompletedAt: '2026-09-06T11:59:00.000Z', cleanupStatus: 'failed' }],
   })
 })
 

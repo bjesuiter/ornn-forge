@@ -115,9 +115,9 @@ export async function listDashboardRunners(
       LEFT JOIN runner_error_states fault ON fault.runner_id = runner.runner_id
       LEFT JOIN runner_profiles profile ON profile.runner_id = runner.runner_id
       LEFT JOIN (
-        SELECT l.runner_id, COUNT(*) AS count FROM runner_leases l
-        JOIN jobs j ON j.job_id = l.job_id
-        WHERE j.cleanup_status IS NOT 'verified'
+        SELECT l.runner_id, COUNT(*) AS count FROM jobs j INDEXED BY jobs_dashboard_reservations
+        JOIN runner_leases l ON l.job_id = j.job_id
+        WHERE j.state IS NOT 'pending' AND j.cleanup_status IS NOT 'verified'
         GROUP BY l.runner_id
       ) reservation ON reservation.runner_id = runner.runner_id
       WHERE runner.decommissioned_at IS NULL
@@ -125,9 +125,11 @@ export async function listDashboardRunners(
     database.prepare(`SELECT l.runner_id, l.job_id, i.github_repository_full_name, i.github_issue_number,
       i.github_issue_title, l.generation, l.created_at, l.last_heartbeat_at, l.expires_at,
       j.force_quit_requested_at, j.force_quit_completed_at, j.cleanup_status
-      FROM runner_leases l
-      JOIN jobs j ON j.job_id = l.job_id AND j.state = 'leased' AND j.cleanup_status IS NOT 'verified'
+      FROM jobs j INDEXED BY jobs_dashboard_reservations
+      JOIN runner_leases l ON l.job_id = j.job_id
       JOIN invocations i ON i.invocation_id = j.invocation_id
+      -- SQLite needs the index predicate stated here even though leased jobs are not pending.
+      WHERE j.state = 'leased' AND j.state IS NOT 'pending' AND j.cleanup_status IS NOT 'verified'
       ORDER BY l.created_at ASC`).all<DashboardRunnerJobRow>(),
     database.prepare(`SELECT runner_id, job_id, github_repository_full_name, github_issue_number,
       github_issue_title, started_at AS created_at, completed_at AS execution_completed_at
