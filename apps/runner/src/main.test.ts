@@ -94,6 +94,44 @@ test('the Docker fixture executes through the SandboxDriver and verifies cleanup
   ])
 })
 
+test('the Incus fixture creates a container, clones the pinned commit, installs Bun dependencies, and cleans up', async () => {
+  const calls: string[] = []
+  const revision = 'a'.repeat(40)
+  const driver: SandboxDriver = {
+    async create(spec) {
+      expect(spec.command).toEqual([])
+      expect(spec.resources.memoryBytes).toBe(1024 * 1024 * 1024)
+      calls.push('create')
+      return { ...spec, providerRef: 'incus-job', volumeIds: [] }
+    },
+    async discover() { return [] },
+    async inspect() { return { state: 'absent', observedAt: '' } },
+    async exec(_lease, request) {
+      calls.push(request.command.includes('bun') ? 'bun' : request.command.includes('clone') ? 'clone' : request.command.includes('fetch') ? 'fetch' : request.command.includes('rm') ? 'remove-token' : request.command.includes('rev-parse') ? 'check-sha' : 'exec')
+      return { exitCode: 0, stdout: new TextEncoder().encode(request.command.includes('rev-parse') ? `${revision}\n` : ''), stderr: new Uint8Array() }
+    },
+    async readFile() { return new Uint8Array() },
+    async writeFile(_lease, path, data) {
+      expect(path).toBe('/workspace/.ornn-credential')
+      expect(new TextDecoder().decode(data)).toContain('checkout-token')
+      calls.push('write-token')
+    },
+    async collectArtifacts() { calls.push('collect'); return new Map([['/workspace/fixture-artifact.json', new TextEncoder().encode('{"kind":"plan"}\n')]]) },
+    async terminate() { calls.push('terminate') },
+    async destroy() { calls.push('destroy') },
+  }
+
+  const result = await executeDockerFixture({ runnerId: 'runner_incus', image: revision.repeat(2).slice(0, 64), driver, executor: 'incus' }, {
+    jobId: 'job_incus', leaseToken: 'lease_incus', generation: 1, expiresAt: '2026-09-07T12:15:00.000Z',
+    repository: { fullName: 'acme/widget' },
+    checkout: { revision, archiveUrl: `https://api.github.com/repos/acme/widget/tarball/${revision}`, token: 'checkout-token', expiresAt: '2026-09-07T12:15:00.000Z' },
+    workOrder: { issueNumber: 1, title: 'Fixture', body: '', comment: '@ornn' },
+  }, new AbortController().signal)
+
+  expect(result.cleanupStatus).toBe('verified')
+  expect(calls).toEqual(['create', 'exec', 'exec', 'write-token', 'clone', 'fetch', 'remove-token', 'exec', 'check-sha', 'bun', 'exec', 'collect', 'terminate', 'destroy'])
+})
+
 test('the Docker fixture reports its failed creation boundary without provider details', async () => {
   const stages: string[] = []
   const driver: SandboxDriver = {

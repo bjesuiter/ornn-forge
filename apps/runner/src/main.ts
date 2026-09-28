@@ -10,8 +10,10 @@ import {
 } from '@ornn-forge/protocol'
 import { readFile, unlink } from 'node:fs/promises'
 import { createDockerCliGateway } from './docker-gateway'
-import { createRepositoryWorkspaceImporter, type RepositoryWorkspaceImporter } from './repository-workspace'
+import { createIncusCliGateway } from './incus-gateway'
+import { createRepositoryWorkspaceCloner, createRepositoryWorkspaceImporter, type RepositoryWorkspaceImporter } from './repository-workspace'
 import { createDockerSandboxDriver, type SandboxDriver, type SandboxLease } from './sandbox'
+import { createIncusSandboxDriver } from './sandbox.incus'
 
 export type RemoteRunnerConfig = {
   controlPlaneUrl: string
@@ -67,7 +69,7 @@ export async function remoteRunnerConfigFromEnvironment(
 
   const executor = environment.ORNN_RUNNER_EXECUTOR ?? 'docker'
   const sandboxImage = environment.ORNN_SANDBOX_IMAGE
-  if (executor === 'docker' && !sandboxImage) throw new Error('ORNN_SANDBOX_IMAGE is required when ORNN_RUNNER_EXECUTOR is docker')
+  if ((executor === 'docker' || executor === 'incus') && !sandboxImage) throw new Error('ORNN_SANDBOX_IMAGE is required for sandbox execution')
   return {
     controlPlaneUrl,
     runnerId,
@@ -144,7 +146,7 @@ export async function runRemoteRunner(
       } finally {
         await stateStore.save(state)
       }
-      const connection = await openControlConnection(config, state, stateStore, createSocket, options.onSynchronized, options.executeLease ?? defaultLeaseExecutor(config), options.forceQuitDriver ?? (() => createDockerSandboxDriver({ gateway: createDockerCliGateway() })))
+      const connection = await openControlConnection(config, state, stateStore, createSocket, options.onSynchronized, options.executeLease ?? defaultLeaseExecutor(config), options.forceQuitDriver ?? (() => sandboxDriver(config)))
       attempt = 0
       await connection.closed
     } catch {
@@ -155,20 +157,33 @@ export async function runRemoteRunner(
 }
 
 function defaultLeaseExecutor(config: RemoteRunnerConfig): LeaseExecutor {
-  if (config.profile.executor !== 'docker') return async () => ({ artifact: fixtureArtifact(), cleanupStatus: 'verified' })
-  if (!config.sandboxImage) throw new Error('Docker Runner is missing its digest-pinned sandbox image')
-  const driver = createDockerSandboxDriver({ gateway: createDockerCliGateway() })
-  const importWorkspace = createRepositoryWorkspaceImporter()
+  if (config.profile.executor !== 'docker' && config.profile.executor !== 'incus') return async () => ({ artifact: fixtureArtifact(), cleanupStatus: 'verified' })
+  if (!config.sandboxImage) throw new Error('Runner is missing its pinned sandbox image')
+  const driver = sandboxDriver(config)
+  const importWorkspace = config.profile.executor === 'docker' ? createRepositoryWorkspaceImporter() : undefined
   return (lease, signal, lifecycle) => executeDockerFixture({
     runnerId: config.runnerId, image: config.sandboxImage as string, driver, importWorkspace,
+    executor: config.profile.executor === 'incus' ? 'incus' : 'docker',
     onSandboxCreated: lifecycle.created, onSandboxCleaned: lifecycle.cleaned, onObserved: lifecycle.observed,
   }, lease, signal)
 }
 
 function defaultSandboxReconciler(config: RemoteRunnerConfig): (state: RunnerControlState) => Promise<void> {
-  if (config.profile.executor !== 'docker') return async () => undefined
-  const driver = createDockerSandboxDriver({ gateway: createDockerCliGateway() })
+  if (config.profile.executor !== 'docker' && config.profile.executor !== 'incus') return async () => undefined
+  const driver = sandboxDriver(config)
   return (state) => reconcileDockerSandboxes(state, driver, config.runnerId)
+}
+
+function sandboxDriver(config: RemoteRunnerConfig): SandboxDriver {
+  return config.profile.executor === 'incus'
+    ? createIncusSandboxDriver({ gateway: createIncusCliGateway({ project: requiredIncusProject() }) })
+    : createDockerSandboxDriver({ gateway: createDockerCliGateway() })
+}
+
+function requiredIncusProject(): string {
+  const project = process.env.ORNN_INCUS_PROJECT
+  if (!project || !/^[a-z0-9][a-z0-9-]*$/.test(project) || project === 'default') throw new Error('Runner requires a restricted ORNN_INCUS_PROJECT')
+  return project
 }
 
 export function reconnectDelay(attempt: number, random: () => number = Math.random): number {
@@ -480,7 +495,7 @@ function fixtureArtifact() {
 }
 
 export async function executeDockerFixture(
-  options: { runnerId: string; image: string; driver: SandboxDriver; now?: () => string; importWorkspace?: RepositoryWorkspaceImporter; onSandboxCreated?: (sandbox: SandboxLease) => Promise<void>; onSandboxCleaned?: (sandbox: SandboxLease) => Promise<void>; onObserved?: (stage: RunnerLeaseStage, faultCode?: string) => void },
+  options: { runnerId: string; image: string; driver: SandboxDriver; executor?: 'docker' | 'incus'; now?: () => string; importWorkspace?: RepositoryWorkspaceImporter; onSandboxCreated?: (sandbox: SandboxLease) => Promise<void>; onSandboxCleaned?: (sandbox: SandboxLease) => Promise<void>; onObserved?: (stage: RunnerLeaseStage, faultCode?: string) => void },
   lease: LeaseGrant,
   signal: AbortSignal,
 ): Promise<{ artifact: ReturnType<typeof fixtureArtifact>; cleanupStatus: 'verified' | 'failed' }> {
@@ -493,12 +508,12 @@ export async function executeDockerFixture(
       sandboxId: `sandbox_v1_${lease.jobId}-${lease.generation}`,
       generation: lease.generation,
       runnerId: options.runnerId,
-      specFingerprint: `docker-fixture-v1:${options.image}`,
+      specFingerprint: `${options.executor ?? 'docker'}-fixture-v1:${options.image}`,
       createdAt,
       expiresAt: lease.expiresAt,
       image: options.image,
-      command: ['sh', '-ceu', 'mkdir -p /workspace && sleep infinity'],
-      resources: { memoryBytes: 128 * 1024 * 1024, pidsLimit: 64 },
+      command: options.executor === 'incus' ? [] : ['sh', '-ceu', 'mkdir -p /workspace && sleep infinity'],
+      resources: options.executor === 'incus' ? { memoryBytes: 1024 * 1024 * 1024, pidsLimit: 256 } : { memoryBytes: 128 * 1024 * 1024, pidsLimit: 64 },
     }, signal)
   } catch (error) {
     options.onObserved?.('execution_failed', errorCode(error, phase))
@@ -510,11 +525,14 @@ export async function executeDockerFixture(
     options.onObserved?.('sandbox_created')
     phase = 'checkout'
     signal.throwIfAborted()
-    if (!lease.checkout) throw new Error('Docker execution requires a pinned repository checkout')
-    if (!options.importWorkspace) throw new Error('Docker execution is missing its repository workspace importer')
+    if (!lease.checkout) throw new Error('Sandbox execution requires a pinned repository checkout')
+    const importWorkspace = options.executor === 'incus'
+      ? createRepositoryWorkspaceCloner(lease.repository.fullName)
+      : options.importWorkspace
+    if (!importWorkspace) throw new Error('Sandbox execution is missing its repository workspace importer')
     phase = 'workspace_import'
     options.onObserved?.('workspace_import_started')
-    await options.importWorkspace(lease.checkout, sandbox, options.driver, signal)
+    await importWorkspace(lease.checkout, sandbox, options.driver, signal)
     signal.throwIfAborted()
     options.onObserved?.('workspace_imported')
     phase = 'fixture_execution'
