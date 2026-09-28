@@ -16,6 +16,7 @@ const dashboardReadModelsMigration = readFileSync(new URL('../migrations/0013_ad
 const runnerDecommissioningMigration = readFileSync(new URL('../migrations/0014_add_runner_decommissioning.sql', import.meta.url), 'utf8')
 const forceQuitMigration = readFileSync(new URL('../migrations/0015_force_quit.sql', import.meta.url), 'utf8')
 const idleRunnerReadsMigration = readFileSync(new URL('../migrations/0016_bound_idle_runner_reads.sql', import.meta.url), 'utf8')
+const leaseCheckoutsMigration = readFileSync(new URL('../migrations/0017_record_lease_checkouts.sql', import.meta.url), 'utf8')
 
 test('the admission migration creates immutable provenance and append-only events', () => {
   const database = new Database(':memory:')
@@ -98,6 +99,7 @@ test('the fixture Runner migration stores only credential and lease digests', ()
   database.exec(runnerDecommissioningMigration)
   database.exec(forceQuitMigration)
   database.exec(idleRunnerReadsMigration)
+  database.exec(leaseCheckoutsMigration)
   expect(database.query("SELECT hardware_model FROM runner_profiles WHERE runner_id = 'runner_homeserv1'").get())
     .toEqual({ hardware_model: 'Nicht erkannt' })
   expect(database.query("SELECT label FROM remote_runners WHERE runner_id = 'runner_homeserv1'").get())
@@ -113,6 +115,15 @@ test('the fixture Runner migration stores only credential and lease digests', ()
     .toEqual({ decommissioned_at: null, decommission_mode: null })
   expect(database.query("SELECT force_quit_requested_at, force_quit_completed_at, force_quit_command_id FROM jobs WHERE job_id = 'job_v1_a'").get())
     .toEqual({ force_quit_requested_at: null, force_quit_completed_at: null, force_quit_command_id: null })
+  database.run(`INSERT INTO runner_lease_checkouts VALUES (
+    'job_v1_a', 'runner_homeserv1', 1, 'lease-digest-only', 'bjesuiter/ornn-forge',
+    '1111111111111111111111111111111111111111', '2026-09-05T00:00:20.000Z'
+  )`)
+  database.run("DELETE FROM runner_leases WHERE job_id = 'job_v1_a'")
+  expect(database.query('SELECT revision FROM runner_lease_checkouts').get())
+    .toEqual({ revision: '1111111111111111111111111111111111111111' })
+  expect(() => database.run("UPDATE runner_lease_checkouts SET revision = 'other'")).toThrow('runner lease checkouts are immutable')
+  expect(() => database.run('DELETE FROM runner_lease_checkouts')).toThrow('runner lease checkouts are immutable')
 })
 
 test('the dashboard read model backfills only the five latest successful results per Runner', () => {

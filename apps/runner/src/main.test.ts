@@ -94,6 +94,44 @@ test('the Docker fixture executes through the SandboxDriver and verifies cleanup
   ])
 })
 
+test('the Incus fixture creates a container, clones the pinned commit, installs Bun dependencies, and cleans up', async () => {
+  const calls: string[] = []
+  const revision = 'a'.repeat(40)
+  const driver: SandboxDriver = {
+    async create(spec) {
+      expect(spec.command).toEqual([])
+      expect(spec.resources.memoryBytes).toBe(1024 * 1024 * 1024)
+      calls.push('create')
+      return { ...spec, providerRef: 'incus-job', volumeIds: [] }
+    },
+    async discover() { return [] },
+    async inspect() { return { state: 'absent', observedAt: '' } },
+    async exec(_lease, request) {
+      calls.push(request.command.includes('bun') ? 'bun' : request.command.includes('clone') ? 'clone' : request.command.includes('fetch') ? 'fetch' : request.command.includes('rm') ? 'remove-token' : request.command.includes('rev-parse') ? 'check-sha' : 'exec')
+      return { exitCode: 0, stdout: new TextEncoder().encode(request.command.includes('rev-parse') ? `${revision}\n` : ''), stderr: new Uint8Array() }
+    },
+    async readFile() { return new Uint8Array() },
+    async writeFile(_lease, path, data) {
+      expect(path).toBe('/workspace/.ornn-credential')
+      expect(new TextDecoder().decode(data)).toContain('checkout-token')
+      calls.push('write-token')
+    },
+    async collectArtifacts() { calls.push('collect'); return new Map([['/workspace/fixture-artifact.json', new TextEncoder().encode('{"kind":"plan"}\n')]]) },
+    async terminate() { calls.push('terminate') },
+    async destroy() { calls.push('destroy') },
+  }
+
+  const result = await executeDockerFixture({ runnerId: 'runner_incus', image: revision.repeat(2).slice(0, 64), driver, executor: 'incus' }, {
+    jobId: 'job_incus', leaseToken: 'lease_incus', generation: 1, expiresAt: '2026-09-07T12:15:00.000Z',
+    repository: { fullName: 'acme/widget' },
+    checkout: { revision, archiveUrl: `https://api.github.com/repos/acme/widget/tarball/${revision}`, token: 'checkout-token', expiresAt: '2026-09-07T12:15:00.000Z' },
+    workOrder: { issueNumber: 1, title: 'Fixture', body: '', comment: '@ornn' },
+  }, new AbortController().signal)
+
+  expect(result.cleanupStatus).toBe('verified')
+  expect(calls).toEqual(['create', 'exec', 'exec', 'write-token', 'clone', 'fetch', 'remove-token', 'exec', 'check-sha', 'bun', 'exec', 'collect', 'terminate', 'destroy'])
+})
+
 test('the Docker fixture reports its failed creation boundary without provider details', async () => {
   const stages: string[] = []
   const driver: SandboxDriver = {
@@ -114,7 +152,42 @@ test('the Docker fixture reports its failed creation boundary without provider d
     jobId: 'job_v1_abcdefghijklmnopqrstuv', leaseToken: 'lease_v1_123', generation: 1, expiresAt: '2026-09-07T12:15:00.000Z',
     repository: { fullName: 'bjesuiter/ornn-forge' }, workOrder: { issueNumber: 1, title: 'Fixture', body: '', comment: '@ornn' },
   }, new AbortController().signal)).rejects.toThrow('provider detail')
-  expect(stages).toEqual(['execution_started:', 'execution_failed:runner.execution_failed'])
+  expect(stages).toEqual(['execution_started:', 'execution_failed:runner.sandbox_create_failed'])
+})
+
+test('the Docker fixture records which step failed without leaking the thrown detail', async () => {
+  const stages: string[] = []
+  const sandbox: SandboxLease = {
+    sandboxId: 'sandbox_v1_step', generation: 1, runnerId: 'runner_v1_abcdefghijklmnopqrstuv', providerRef: 'container-step',
+    specFingerprint: 'fixture', createdAt: '2026-09-07T12:00:00.000Z', expiresAt: '2026-09-07T12:15:00.000Z', volumeIds: [],
+  }
+  const driver: SandboxDriver = {
+    async create() { return sandbox },
+    async discover() { return [] },
+    async inspect() { return { state: 'absent', observedAt: '' } },
+    async exec() { throw new Error('not used') },
+    async readFile() { throw new Error('not used') },
+    async writeFile() { throw new Error('not used') },
+    async collectArtifacts() { return new Map() },
+    async terminate() {},
+    async destroy() {},
+  }
+
+  await expect(executeDockerFixture({
+    runnerId: sandbox.runnerId, image: 'busybox@sha256:' + 'a'.repeat(64), driver,
+    importWorkspace: async () => { throw new Error('private token must not leave the Runner') },
+    onObserved(stage, faultCode) { stages.push(`${stage}:${faultCode ?? ''}`) },
+  }, {
+    jobId: 'job_v1_abcdefghijklmnopqrstuv', leaseToken: 'lease_v1_step', generation: 1, expiresAt: sandbox.expiresAt,
+    repository: { fullName: 'bjesuiter/ornn-forge' }, checkout: {
+      revision: 'a'.repeat(40), archiveUrl: `https://api.github.com/repos/bjesuiter/ornn-forge/tarball/${'a'.repeat(40)}`,
+      token: 'private-token', expiresAt: sandbox.expiresAt,
+    }, workOrder: { issueNumber: 24, title: 'Fixture', body: '', comment: '@ornn' },
+  }, new AbortController().signal)).rejects.toThrow('private token must not leave the Runner')
+
+  expect(stages).toEqual([
+    'execution_started:', 'sandbox_created:', 'workspace_import_started:', 'execution_failed:runner.workspace_import_failed',
+  ])
 })
 
 test('Runner startup removes a persisted sandbox before it accepts new work', async () => {
@@ -245,6 +318,7 @@ test('the Runner persists a lease before accepting and completing it', async () 
 test('Force Quit aborts active work, removes its sandbox, and sends no normal result', async () => {
   const controller = new AbortController()
   const calls: string[] = []
+  const saved: RunnerControlState[] = []
   const jobId = 'job_v1_forcequit'
   const sandbox: SandboxLease = {
     sandboxId: `sandbox_v1_${jobId}-1`, generation: 1, runnerId: 'runner_homeserv1', providerRef: 'container-forcequit',
@@ -274,7 +348,11 @@ test('Force Quit aborts active work, removes its sandbox, and sends no normal re
   const socket = new ForceQuitSocket()
   await runRemoteRunner({ controlPlaneUrl: 'https://control.test', runnerId: 'runner_homeserv1', credential: 'r'.repeat(32), profile }, {
     signal: controller.signal, forceQuitDriver: () => driver,
-    stateStore: { async load() { return { activeLeases: [], commandJournal: [], sandboxes: [] } }, async save() {}, async markSynchronized() {} },
+    stateStore: {
+      async load() { return { activeLeases: [], commandJournal: [], sandboxes: [] } },
+      async save(state) { saved.push(structuredClone(state)) },
+      async markSynchronized() {},
+    },
     createSocket() { queueMicrotask(() => socket.emit('open')); return socket },
     executeLease: async (_lease, signal) => new Promise((_, reject) => {
       signal.addEventListener('abort', () => { calls.push('abort'); reject(new Error('aborted')) }, { once: true })
@@ -294,6 +372,8 @@ test('Force Quit aborts active work, removes its sandbox, and sends no normal re
   expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
     type: 'runner.force_quit_result', payload: { jobId, cleanupStatus: 'verified' },
   })
+  expect(saved.some((state) => state.activeLeases.some((lease) => lease.jobId === jobId))).toBe(true)
+  expect(saved.at(-1)?.activeLeases).toEqual([])
 })
 
 test('Force Quit verifies an old leased job with no local work or Docker sandbox', async () => {

@@ -4,10 +4,23 @@ import type { SandboxDriver, SandboxLease } from './sandbox'
 const MAX_COMPRESSED_ARCHIVE_BYTES = 64 * 1024 * 1024
 const MAX_UNCOMPRESSED_ARCHIVE_BYTES = 256 * 1024 * 1024
 const MAX_WORKSPACE_FILES = 10_000
+const SANDBOX_STEP_TIMEOUT_MS = 10 * 60_000
 
 type Checkout = NonNullable<LeaseGrant['checkout']>
 type Fetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 type WorkspaceFile = { path: string; data: Uint8Array }
+
+export class RepositoryWorkspaceError extends Error {
+  readonly code = 'runner.workspace.archive_entry_unsupported'
+}
+
+class WorkspaceStepError extends Error {
+  readonly code: string
+  constructor(step: string, cause?: unknown) {
+    super(`sandbox ${step} failed`, { cause })
+    this.code = `runner.${step.replaceAll(' ', '_')}_failed`
+  }
+}
 
 export type RepositoryWorkspaceImporter = (
   checkout: Checkout,
@@ -22,6 +35,43 @@ export function createRepositoryWorkspaceImporter(options: { fetch?: Fetch } = {
     const archive = await downloadArchive(checkout, request, signal)
     const files = await archiveWorkspaceFiles(archive)
     await transferWorkspace(files, lease, driver, signal)
+  }
+}
+
+export function createRepositoryWorkspaceCloner(repository: string): RepositoryWorkspaceImporter {
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error('invalid GitHub repository name')
+  return async (checkout, lease, driver, signal) => {
+    assertPinnedArchiveUrl(checkout)
+    const archive = new URL(checkout.archiveUrl)
+    if (archive.pathname !== `/repos/${repository}/tarball/${checkout.revision}`) throw new Error('checkout repository does not match the lease')
+    if (!checkout.token || /[\r\n]/.test(checkout.token)) throw new Error('invalid checkout token')
+
+    await runSandbox(driver, lease, ['sh', '-ceu', 'for attempt in $(seq 1 20); do getent ahostsv4 github.com >/dev/null && exit 0; sleep 1; done; exit 1'], signal, 'network readiness')
+    await runSandbox(driver, lease, ['sh', '-ceu', 'mkdir -p /workspace && umask 077 && : > /workspace/.ornn-credential'], signal, 'credential setup')
+    const secret = `https://x-access-token:${encodeURIComponent(checkout.token)}@github.com/${repository}.git\n`
+    const git = ['env', 'GIT_TERMINAL_PROMPT=0', 'git', '-c', 'credential.helper=', '-c', 'credential.helper=store --file=/workspace/.ornn-credential', '-c', 'credential.useHttpPath=true']
+    try {
+      await driver.writeFile(lease, '/workspace/.ornn-credential', new TextEncoder().encode(secret))
+      await runSandbox(driver, lease, [...git, 'clone', '--no-checkout', '--depth=1', '--', `https://github.com/${repository}.git`, '/workspace/repo'], signal, 'repository clone')
+      await runSandbox(driver, lease, [...git, '-C', '/workspace/repo', 'fetch', '--depth=1', 'origin', checkout.revision], signal, 'revision fetch')
+    } finally {
+      await runSandbox(driver, lease, ['rm', '-f', '/workspace/.ornn-credential'], new AbortController().signal, 'credential removal')
+    }
+    await runSandbox(driver, lease, ['git', '-C', '/workspace/repo', 'checkout', '--detach', checkout.revision], signal, 'revision checkout')
+    const head = await runSandbox(driver, lease, ['git', '-C', '/workspace/repo', 'rev-parse', 'HEAD'], signal, 'revision check')
+    if (new TextDecoder().decode(head.stdout).trim().toLowerCase() !== checkout.revision.toLowerCase()) throw new Error('sandbox checkout revision mismatch')
+    await runSandbox(driver, lease, ['bun', 'install', '--frozen-lockfile'], signal, 'dependency install', '/workspace/repo')
+  }
+}
+
+async function runSandbox(driver: SandboxDriver, lease: SandboxLease, command: string[], signal: AbortSignal, step: string, cwd?: string) {
+  try {
+    const result = await driver.exec(lease, { command, cwd, timeoutMs: SANDBOX_STEP_TIMEOUT_MS }, signal)
+    if (result.exitCode !== 0) throw new WorkspaceStepError(step)
+    return result
+  } catch (error) {
+    if (error instanceof WorkspaceStepError) throw error
+    throw new WorkspaceStepError(step, error)
   }
 }
 
@@ -77,7 +127,7 @@ async function archiveWorkspaceFiles(compressedArchive: Uint8Array): Promise<Wor
     const parts = safeArchivePath(entry.name)
     root ??= parts[0]
     if (parts[0] !== root) throw new Error('repository archive has multiple roots')
-    if (entry.type !== '0' && entry.type !== '\0' && entry.type !== '5') throw new Error(`unsafe tar entry: ${entry.type || 'unknown'}`)
+    if (entry.type !== '0' && entry.type !== '\0' && entry.type !== '5') throw new RepositoryWorkspaceError(`unsafe tar entry: ${entry.type || 'unknown'}`)
     if (entry.type === '5') continue
     if (parts.length < 2) throw new Error('repository archive file is outside its root directory')
     files.push({ path: `/workspace/${parts.slice(1).join('/')}`, data: entry.data })

@@ -366,9 +366,9 @@ export function Dashboard({
                       )}
                       <p className="fd-runner-id">{runner.id}</p>
                       <div className="fd-runner-state">
-                        <p className={`fd-runner-presence ${runner.online ? 'is-online' : 'is-offline'}`}>
+                        <p className={`fd-runner-presence is-${runner.presence}`}>
                           <span aria-hidden="true" />
-                          {runner.online ? 'Online' : 'Offline'}
+                          {runner.presence === 'online' ? 'Online' : runner.presence === 'late' ? 'Heartbeat verspätet' : 'Offline'}
                         </p>
                         {runner.enrollment === 'awaiting_setup' && (
                           <span className="fd-runner-enrollment">Einrichtung ausstehend</span>

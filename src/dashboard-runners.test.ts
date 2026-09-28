@@ -39,7 +39,7 @@ test('the dashboard keeps runner presence, pause, faults, capacity, and work as 
       capacity: 2,
       reservations: 1,
     },
-  ], '2026-09-06T11:59:40.000Z', [
+  ], new Date('2026-09-06T12:00:00.000Z'), [
     {
       runner_id: 'runner_homeserv1',
       job_id: 'job_v1_active',
@@ -69,7 +69,7 @@ test('the dashboard keeps runner presence, pause, faults, capacity, and work as 
     enrollment: 'enrolled',
     ready: true,
     desiredCapacity: 2,
-    online: true,
+    presence: 'online',
     lastSeenAt: '2026-09-06T12:00:00.000Z',
     paused: true,
     fault: { code: 'runner.operation_failed', occurredAt: '2026-09-06T11:59:30.000Z' },
@@ -133,16 +133,36 @@ test('the dashboard query keeps enrollment, readiness, and presence separate', a
 
   const runners = await listDashboardRunners(sqliteDashboardDatabase(database), new Date('2026-09-06T12:00:05.000Z'))
 
-  expect(runners.map(({ id, label, enrollment, ready, online, desiredCapacity }) => ({ id, label, enrollment, ready, online, desiredCapacity }))).toEqual([
-    { id: 'runner_awaiting', label: 'Unbenannt', enrollment: 'awaiting_setup', ready: false, online: false, desiredCapacity: 2 },
-    { id: 'runner_enrolled', label: 'Unbenannt', enrollment: 'enrolled', ready: true, online: true, desiredCapacity: 3 },
-    { id: 'runner_stale', label: 'Unbenannt', enrollment: 'enrolled', ready: false, online: false, desiredCapacity: 1 },
+  expect(runners.map(({ id, label, enrollment, ready, presence, desiredCapacity }) => ({ id, label, enrollment, ready, presence, desiredCapacity }))).toEqual([
+    { id: 'runner_awaiting', label: 'Unbenannt', enrollment: 'awaiting_setup', ready: false, presence: 'offline', desiredCapacity: 2 },
+    { id: 'runner_enrolled', label: 'Unbenannt', enrollment: 'enrolled', ready: true, presence: 'online', desiredCapacity: 3 },
+    { id: 'runner_stale', label: 'Unbenannt', enrollment: 'enrolled', ready: false, presence: 'offline', desiredCapacity: 1 },
   ])
   const betweenHeartbeats = await listDashboardRunners(sqliteDashboardDatabase(database), new Date('2026-09-06T12:00:24.000Z'))
-  expect(betweenHeartbeats.find((runner) => runner.id === 'runner_enrolled')).toMatchObject({ ready: true, online: true })
+  expect(betweenHeartbeats.find((runner) => runner.id === 'runner_enrolled')).toMatchObject({ ready: true, presence: 'online' })
   expect(runners.find((runner) => runner.id === 'runner_enrolled')).toMatchObject({
     reservations: 2, activeJobs: [{ id: 'job_failed', forceQuitCompletedAt: '2026-09-06T11:59:00.000Z', cleanupStatus: 'failed' }],
   })
+})
+
+test('runner presence stays online through 40 seconds, late through 90 seconds, then goes offline', async () => {
+  const database = new Database(':memory:')
+  for (const migration of migrations) database.exec(migration)
+  database.run(`INSERT INTO remote_runners (runner_id, kind, desired_capacity, enrollment_state, readiness_state, created_at)
+    VALUES ('runner_enrolled', 'remote', 1, 'enrolled', 'ready', '2026-09-06T12:00:00.000Z')`)
+  database.run("INSERT INTO runner_credentials VALUES ('runner_enrolled', 'digest-only', '2026-09-06T12:00:00.000Z')")
+  database.run("INSERT INTO runner_presence VALUES ('runner_enrolled', '2026-09-06T12:00:00.000Z')")
+
+  for (const [time, presence] of [
+    ['12:00:00.000', 'online'],
+    ['12:00:40.000', 'online'],
+    ['12:00:40.001', 'late'],
+    ['12:01:30.000', 'late'],
+    ['12:01:30.001', 'offline'],
+  ] as const) {
+    const [runner] = await listDashboardRunners(sqliteDashboardDatabase(database), new Date(`2026-09-06T${time}Z`))
+    expect(runner.presence).toBe(presence)
+  }
 })
 
 function sqliteDashboardDatabase(database: Database): DashboardRunnerDatabase {
