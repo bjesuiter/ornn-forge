@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# Guest shell expressions must expand inside the container, not on the host.
+# shellcheck disable=SC2016
+set -euo pipefail
+
+# Protect Ornn's storage and restart boundaries with live, disposable instances.
+[[ $(id -u) == 0 && $(hostname) == homeserv1 ]] || { echo 'Run as root on homeserv1' >&2; exit 1; }
+project=user-996
+pool=ornn-incus-zfs
+service=ornn-forge-incus-runner.service
+bun=/opt/ornn-forge/bun/bin/bun
+state=/var/lib/ornn-incus-runner/control-state.json
+ready=/var/lib/ornn-incus-runner/control-connection.ready
+runner=$(sed -n 's/^ORNN_RUNNER_ID=//p' /etc/ornn-forge/incus-runner.env)
+image=$(sed -n 's/^ORNN_SANDBOX_IMAGE=//p' /etc/ornn-forge/incus-runner.env)
+[[ $runner =~ ^runner_v1_[A-Za-z0-9_-]+$ && $image =~ ^[a-f0-9]{64}$ ]]
+stamp=$(date -u +%Y%m%d%H%M%S)
+primary=ornn-zfs-probe-$stamp
+peer=ornn-peer-probe-$stamp
+port=39124
+work=$(mktemp -d /tmp/ornn-incus-smoke.XXXXXX)
+aliases=()
+children=()
+stopped=false
+created=()
+
+userincus() { runuser -u ornn-forge-incus -- incus --project "$project" "$@"; }
+assert_idle() {
+  jq -e '(.activeLeases | length) == 0 and (.sandboxes | length) == 0' "$state" >/dev/null
+  [[ $(userincus list --format=json | jq length) == 0 ]]
+}
+dataset() { printf '%s/containers/%s_%s' "$pool" "$project" "$1"; }
+assert_absent() {
+  if userincus list --format=json | jq -e --arg name "$1" 'any(.[]; .name == $name)' >/dev/null; then return 1; fi
+  if zfs list "$(dataset "$1")" >/dev/null 2>&1; then return 1; fi
+  [[ $(incus storage volume list "$pool" --project "$project" --format=json | jq --arg name "$1" '[.[] | select(.type == "container" and .name == $name)] | length') == 0 ]]
+}
+cleanup() {
+  result=$?
+  trap - EXIT
+  for name in "${created[@]}"; do
+    if userincus list --format=json | jq -e --arg name "$name" 'any(.[]; .name == $name)' >/dev/null; then
+      # A full dataset can prevent Incus 6.0's ownership reset during stop.
+      userincus exec "$name" -- rm -f /workspace/quota-probe 2>/dev/null || true
+      userincus delete "$name" --force || result=1
+    fi
+    assert_absent "$name" || result=1
+  done
+  for child in "${children[@]}"; do kill "$child" 2>/dev/null || true; done
+  for address in "${aliases[@]}"; do ip addr del "$address/32" dev ornn-incusbr || result=1; done
+  if $stopped; then systemctl start "$service" || result=1; fi
+  rm -rf "$work"
+  exit "$result"
+}
+trap cleanup EXIT
+systemctl is-active --quiet "$service"
+assert_idle
+old_pid=$(systemctl show "$service" -p MainPID --value)
+systemctl stop "$service"
+stopped=true
+assert_idle
+
+launch() {
+  name=$1 owner=$2
+  created+=("$name")
+  userincus launch "$image" "$name" \
+    -c limits.cpu=1 -c limits.memory=512MiB -c limits.processes=128 \
+    -c user.ornn.managed=true -c "user.ornn.runner-id=$owner" \
+    -c "user.ornn.sandbox-id=sandbox_$name" -c user.ornn.generation=1 \
+    -c "user.ornn.spec-fingerprint=zfs-smoke-$stamp" \
+    -c "user.ornn.created-at=$(date -u +%FT%TZ)" \
+    -c "user.ornn.expires-at=$(date -u -d '+15 minutes' +%FT%TZ)"
+  [[ $(zfs get -Hp -o value quota "$(dataset "$name")") == 5368709120 ]]
+  [[ $(zfs get -Hp -o value refquota "$(dataset "$name")") == 0 ]]
+}
+launch "$primary" "$runner"
+[[ $(zfs get -H -o value zoned "$(dataset "$primary")") == off ]]
+userincus exec "$primary" -- sh -ceu 'mkdir -p /workspace; echo restart-proof > /workspace/restart-marker; test ! -S /var/run/docker.sock; test ! -S /var/lib/incus/unix.socket; test ! -e /var/lib/ornn-incus-runner'
+userincus exec "$primary" -- bun -e 'const fs=require("node:fs");try{fs.openSync("/dev/zfs","r+");throw new Error("Job can open host ZFS control device")}catch(error){if(error.code!=="EACCES"&&error.code!=="EPERM")throw error}'
+if userincus exec "$primary" -- mknod /workspace/zfs-node c 10 249; then
+  echo 'FAIL: Job can recreate the ZFS control device' >&2; exit 1
+fi
+echo 'PASS: Job root dataset has quota=5GiB; host ZFS control access and device recreation are denied'
+
+# Random data defeats compression, so this must hit the real dataset quota.
+if userincus exec "$primary" -- timeout 180 dd if=/dev/urandom of=/workspace/quota-probe bs=1M count=6144 conv=fsync >"$work/quota.log" 2>&1; then
+  echo 'FAIL: wrote 6GiB through a 5GiB quota' >&2; exit 1
+fi
+grep -Eq 'Disk quota exceeded|No space left on device' "$work/quota.log"
+cat "$work/quota.log"
+[[ $(userincus exec "$primary" -- stat -c %s /workspace/quota-probe) -le 5368709120 ]]
+userincus exec "$primary" -- rm /workspace/quota-probe
+echo 'PASS: incompressible writes beyond the Job quota are rejected'
+
+launch "$peer" "runner_probe_$stamp"
+server='Bun.serve({hostname:"0.0.0.0",port:39124,fetch(){return new Response("ornn-isolation-probe")}});'
+"$bun" -e "$server" >"$work/host-server.log" 2>&1 &
+children+=("$!")
+userincus exec "$peer" -- bun -e "$server" >"$work/peer-server.log" 2>&1 &
+children+=("$!")
+for address in 169.254.169.254 172.31.255.254 192.168.255.254; do
+  # Refuse to disturb an address that is already configured on this host.
+  if ip -j address | jq -e --arg ip "$address" 'any(.[].addr_info[]; .local == $ip)' >/dev/null; then
+    echo "Refusing to use existing address $address" >&2; exit 1
+  fi
+  ip addr add "$address/32" dev ornn-incusbr
+  aliases+=("$address")
+done
+peer_ip=''
+for attempt in $(seq 1 30); do
+  peer_ip=$(userincus list "$peer" --format=json | jq -r '.[0].state.network.eth0.addresses[]? | select(.family == "inet") | .address' | head -1)
+  if [[ -n $peer_ip ]] && curl --noproxy '*' --max-time 1 -fsS "http://$peer_ip:$port" | grep -qx ornn-isolation-probe; then break; fi
+  sleep 1
+done
+[[ -n $peer_ip ]]
+curl --noproxy '*' --max-time 2 -fsS "http://$peer_ip:$port" | grep -qx ornn-isolation-probe
+targets=(10.39.79.1 10.1.1.2 10.1.1.254 100.105.192.125 172.17.0.1 172.18.0.1 172.19.0.1 10.158.145.1 169.254.169.254 172.31.255.254 192.168.255.254 "$peer_ip")
+for address in "${targets[@]}"; do
+  # The LAN gateway is external; validate every host/alias/peer endpoint locally.
+  if [[ $address != 10.1.1.254 ]]; then
+    curl --noproxy '*' --max-time 2 -fsS "http://$address:$port" | grep -qx ornn-isolation-probe
+  fi
+done
+
+network_probes() {
+  userincus exec "$primary" -- sh -ceu 'for attempt in $(seq 1 20); do if timeout 2 getent ahostsv4 github.com >/dev/null; then exit 0; fi; sleep 1; done; exit 1'
+  userincus exec "$primary" -- bun -e 'for(const url of ["https://github.com","https://registry.npmjs.org/bun"]){const response=await fetch(url,{signal:AbortSignal.timeout(15000)});if(!response.ok)throw new Error(url+" "+response.status);console.log("PASS: public "+url)}'
+  userincus exec "$primary" -- sh -ceu 'command -v timeout; command -v bash; getent ahostsv4 github.com >/dev/null; ip -4 address show eth0 | grep -q "inet 10.39.79."; test -z "$(ip -6 route show default)"'
+  echo 'PASS: DHCP/DNS work; no IPv6 default route'
+  for address in "${targets[@]}"; do
+    if userincus exec "$primary" -- timeout 3 bash -c 'exec 3<>/dev/tcp/$1/$2' -- "$address" "$port"; then
+      echo "FAIL: reachable forbidden TCP endpoint $address:$port" >&2; exit 1
+    fi
+    echo "PASS: denied TCP $address:$port"
+  done
+  # Check actual LAN gateway/host services as well as controlled TCP endpoints.
+  for endpoint in 10.1.1.254:80 10.1.1.2:22 10.39.79.1:22 169.254.169.254:80; do
+    if userincus exec "$primary" -- timeout 3 bash -c 'exec 3<>/dev/tcp/${1%:*}/${1##*:}' -- "$endpoint"; then
+      echo "FAIL: reachable forbidden service $endpoint" >&2; exit 1
+    fi
+    echo "PASS: denied service $endpoint"
+  done
+  # A public DNS name pointing to a private address must not bypass the IP policy.
+  userincus exec "$primary" -- sh -ceu 'echo "169.254.169.254 private-probe.invalid" >> /etc/hosts; getent ahostsv4 private-probe.invalid | grep -q "169.254.169.254"'
+  userincus exec "$primary" -- bun -e 'try{await fetch("http://private-probe.invalid:39124",{signal:AbortSignal.timeout(3000)});process.exit(1)}catch{console.log("PASS: private destination via hostname denied")}'
+}
+echo 'Network probes before Runner restart'
+network_probes
+
+# The deployed Runner must discover and destroy its orphan before synchronizing.
+rm -f "$ready"
+start=$(date +%s)
+systemctl start "$service"
+stopped=false
+for ((attempt=0; attempt<60; attempt++)); do
+  if [[ -f $ready ]] && [[ $(stat -c %Y "$ready") -ge $start ]]; then break; fi
+  sleep 1
+done
+systemctl is-active --quiet "$service"
+[[ -f $ready && $(stat -c %Y "$ready") -ge $start ]]
+[[ $(systemctl show "$service" -p MainPID --value) != "$old_pid" ]]
+assert_absent "$primary"
+jq -e '(.sandboxes | length) == 0' "$state" >/dev/null
+userincus info "$peer" >/dev/null
+curl --noproxy '*' --max-time 2 -fsS "http://$peer_ip:$port" | grep -qx ornn-isolation-probe
+echo 'PASS: new Runner process synchronized after removing its owned instance and ZFS dataset; foreign probe survived'
+
+launch "$primary" "runner_probe_$stamp"
+echo 'Network probes after Runner restart'
+network_probes
+userincus stop "$primary" --force
+userincus delete "$primary"
+assert_absent "$primary"
+echo 'PASS: ordinary stop/delete removes the exact Job instance, Incus volume, and ZFS dataset'
+echo 'Runner restart smoke complete; host reboot was not performed'

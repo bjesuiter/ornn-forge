@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Run on homeserv1 as root with an idle Incus Runner. Keep the old pool for rollback.
+project=user-996
+pool=ornn-incus-zfs
+service=ornn-forge-incus-runner.service
+state=/var/lib/ornn-incus-runner/control-state.json
+
+[[ $(id -u) == 0 ]] || { echo 'Run as root on homeserv1' >&2; exit 1; }
+[[ $(hostname) == homeserv1 ]] || { echo 'This setup is for homeserv1' >&2; exit 1; }
+command -v zfs >/dev/null
+command -v jq >/dev/null
+systemctl is-active --quiet "$service"
+jq -e '(.activeLeases | length) == 0 and (.sandboxes | length) == 0' "$state" >/dev/null
+[[ $(incus list --project "$project" --format=json | jq length) == 0 ]]
+
+systemctl stop "$service"
+trap 'systemctl start "$service"' EXIT
+# Repeat after stopping the Runner to catch work assigned during preflight.
+jq -e '(.activeLeases | length) == 0 and (.sandboxes | length) == 0' "$state" >/dev/null
+[[ $(incus list --project "$project" --format=json | jq length) == 0 ]]
+
+backup=/var/lib/ornn-incus-runner/profile-before-zfs.yaml
+if [[ ! -e $backup ]]; then
+  incus profile show default --project "$project" > "$backup"
+  chmod 0600 "$backup"
+fi
+
+if ! incus storage list --format=json | jq -e --arg pool "$pool" 'any(.[]; .name == $pool)' >/dev/null; then
+  # A new loop-backed pool avoids formatting either of the host's existing disks.
+  available=$(df --output=avail -B1 /var/lib/incus | tail -1)
+  (( available >= 24 * 1024 * 1024 * 1024 ))
+  incus storage create "$pool" zfs size=12GiB
+fi
+[[ $(incus storage get "$pool" zfs.pool_name) == "$pool" ]]
+incus storage show "$pool" | grep -qx 'driver: zfs'
+[[ $(stat -c %s "/var/lib/incus/disks/$pool.img") == 12884901888 ]]
+incus storage set "$pool" volume.size 5GiB
+incus storage set "$pool" volume.zfs.use_refquota false
+incus storage set "$pool" volume.zfs.reserve_space false
+incus storage set "$pool" volume.zfs.delegate false
+# Incus automatically mounts /dev/zfs into unprivileged containers on ZFS 2.2.
+# Keep host ZFS administration root-only; mapped Job root cannot open this node.
+rule='KERNEL=="zfs", OWNER="root", GROUP="root", MODE="0600"'
+rule_path=/etc/udev/rules.d/99-ornn-zfs.rules
+if [[ -e $rule_path && $(cat "$rule_path") != "$rule" ]]; then
+  echo "Refusing to replace a different rule at $rule_path" >&2
+  exit 1
+fi
+printf '%s\n' "$rule" > "$rule_path"
+udevadm control --reload-rules
+chmod 0600 /dev/zfs
+incus profile device set default root pool="$pool" size=5GiB --project "$project"
+incus profile show default --project "$project"
+zpool status "$pool"
