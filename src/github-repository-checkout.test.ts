@@ -10,19 +10,27 @@ test('resolves one exact repository revision with a short-lived read-only instal
     const url = String(input)
     calls.push({ url, method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? init.body : undefined })
     if (url.includes('/access_tokens')) return Response.json({ token: 'read-token', expires_at: '2026-09-07T13:00:00.000Z' }, { status: 201 })
-    if (url.endsWith('/repos/bjesuiter/ornn-forge')) return Response.json({ default_branch: 'main' })
+    if (url.endsWith('/repos/bjesuiter/ornn-forge') || url.endsWith('/repos/bjesuiter/bgf-wlan-translation-v5')) return Response.json({ default_branch: 'main' })
     if (url.endsWith('/git/ref/heads/main')) return Response.json({ object: { type: 'commit', sha: 'a'.repeat(40) } })
     throw new Error(`unexpected GitHub URL ${url}`)
   }) as typeof fetch
 
-  const checkout = await createGitHubRepositoryCheckout({ appId: '12345', privateKey, installationId: '159365588', repositoryId: '1296836371' }, request)
-    .resolve('bjesuiter/ornn-forge')
+  const resolver = createGitHubRepositoryCheckout({ appId: '12345', privateKey, installationId: '159365588', repositories: [
+    { id: '1296836371', fullName: 'bjesuiter/ornn-forge' },
+    { id: '930524684', fullName: 'bjesuiter/bgf-wlan-translation-v5' },
+  ] }, request)
+  const checkout = await resolver.resolve('bjesuiter/ornn-forge')
 
   expect(checkout).toEqual({
     repository: 'bjesuiter/ornn-forge', revision: 'a'.repeat(40), token: 'read-token', expiresAt: '2026-09-07T13:00:00.000Z',
     archiveUrl: `https://api.github.com/repos/bjesuiter/ornn-forge/tarball/${'a'.repeat(40)}`,
   })
   expect(JSON.parse(calls[0].body!)).toEqual({ repository_ids: [1_296_836_371], permissions: { contents: 'read' } })
+  const privateCheckout = await resolver.resolve('bjesuiter/bgf-wlan-translation-v5')
+  expect(privateCheckout.repository).toBe('bjesuiter/bgf-wlan-translation-v5')
+  expect(JSON.parse(calls[3].body!)).toEqual({ repository_ids: [930_524_684], permissions: { contents: 'read' } })
+  await expect(resolver.resolve('bjesuiter/not-allowed')).rejects.toThrow('not configured')
+  expect(calls).toHaveLength(6)
   expect(new Headers({ authorization: 'Bearer token' }).get('authorization')).toBe('Bearer token')
 })
 

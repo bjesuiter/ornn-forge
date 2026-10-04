@@ -1,6 +1,6 @@
-# Homeserv1 Incus Runner (development spike)
+# Homeserv1 Incus Runner
 
-The Incus runner is separate from the existing Docker runner. Its control-plane ID is `runner_v1_3mF9rxJuCrswy7Ppb9EyPQ`, label `homeserv1-incus`; it is currently **paused**. Do not unpause it until a test Job can be routed to this runner without consuming unrelated pending work.
+The Incus runner is separate from the paused Docker runner. Its control-plane ID is `runner_v1_3mF9rxJuCrswy7Ppb9EyPQ`, label `homeserv1-incus`, and it currently accepts Job leases. Keep the Docker runner paused while testing Incus. The private-repository test target is `bjesuiter/bgf-wlan-translation-v5`; check the GitHub App installation and repository allowlist before creating another test Invocation.
 
 ## Host layout
 
@@ -26,4 +26,4 @@ The ready marker `/var/lib/ornn-incus-runner/control-connection.ready` proves au
 ssh root.homeserv1 'cd /home/ornn-forge-incus/ornn-forge && runuser -u ornn-forge-incus -- env ORNN_INCUS_PROJECT=user-996 ORNN_INCUS_TEST_IMAGE=2685fc80ffd3b46fc197680eebd348c03a69bdf62aa0fac983ffe49e4a91418f ORNN_INCUS_TEST_REVISION=37b19f9fd6f9439b1535889e5a6f8a4312b321b2 /opt/ornn-forge/bun/bin/bun test apps/runner/src/sandbox.incus.integration.test.ts'
 ```
 
-The test starts a container, clones that exact SHA **inside** it through the production workspace importer, runs `bun install --frozen-lockfile`, checks that the temporary credential file is gone and the Git remote contains no token, transfers and collects a file, then stops and deletes the container. It uses a dummy token against a public repository: it does not prove private-token checkout, control-plane Job routing, runner recovery after host reboot or production-grade network isolation.
+The test starts a container, clones that exact SHA **inside** it through the production workspace importer, runs `bun install --frozen-lockfile`, checks that the temporary credential file is gone and the Git remote contains no token, transfers and collects a file, then stops and deletes the container. It uses a dummy token against a public repository. Live Jobs for issue #69 and [the private-repository fixture](https://github.com/bjesuiter/bgf-wlan-translation-v5/issues/281) proved control-plane routing, private-token checkout, dependency installation, and verified Incus cleanup. Runner recovery after host reboot and production-grade network isolation remain unproved.

@@ -4,11 +4,13 @@ The Remote Runner runs as `ornn-forge-runner.service`. Its transport credential 
 
 ## GitHub App prerequisite
 
-The Ornn GitHub App installation for `bjesuiter/ornn-forge` must grant
-**Repository contents: Read-only**. After changing that permission in the App
-settings, accept the installation's permission update before restarting the
-Runner. The Runner mints a repository-scoped, read-only installation token
-before it can accept a Job lease.
+The Ornn GitHub App installation must include `bjesuiter/ornn-forge` and
+`bjesuiter/bgf-wlan-translation-v5`, with **Repository contents: Read-only**
+and **Issues: Read and write**. If the installation uses selected repositories,
+add the private repo there and accept any permission update. Ornn authorizes
+each repository by both numeric ID and full name. It mints a separate,
+repository-scoped read token for each Job checkout and an issues-write token
+for its GitHub message. A personal `gh` login does not prove App access.
 
 ## Install or replace the unit
 

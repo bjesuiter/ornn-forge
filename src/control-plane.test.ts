@@ -114,6 +114,26 @@ test('admits one signed delivery and lets the operator inspect its pending Analy
   expect(await resolved.json()).toMatchObject({ job: { id: accepted.jobId }, message: { id: inspection.message.id } })
 })
 
+test('admits an explicitly configured second repository but rejects a mismatched repository identity', async () => {
+  const store = createInMemoryInvocationStore()
+  const app = createControlPlane({
+    store, githubWebhookSecret: webhookSecret, githubInstallationId: '42', githubRepositoryId: '99',
+    githubRepositoryFullName: 'bjesuiter/ornn-forge',
+    githubAdditionalRepositories: [{ id: '100', fullName: 'bjesuiter/bgf-wlan-translation-v5' }],
+    operatorBearerSecret: operatorSecret,
+  })
+  const privatePayload = issueComment()
+  privatePayload.repository = { id: 100, full_name: 'bjesuiter/bgf-wlan-translation-v5' }
+  expect((await app.fetch(await signedWebhookRequest('private-repo', privatePayload))).status).toBe(201)
+
+  const wrongName = issueComment()
+  wrongName.repository = { id: 100, full_name: 'bjesuiter/not-allowed' }
+  expect((await app.fetch(await signedWebhookRequest('wrong-name', wrongName))).status).toBe(403)
+  const wrongId = issueComment()
+  wrongId.repository = { id: 101, full_name: 'bjesuiter/bgf-wlan-translation-v5' }
+  expect((await app.fetch(await signedWebhookRequest('wrong-id', wrongId))).status).toBe(403)
+})
+
 test('retains a redacted Runner execution boundary for an accepted lease', async () => {
   const store = createInMemoryInvocationStore()
   const app = createControlPlane({

@@ -3,7 +3,7 @@ import { createPrivateKey } from 'node:crypto'
 import { createGitHubMessagePublisher } from './github-message-publisher'
 
 test('GitHub message publisher creates, updates, and finds only the rendered effect', async () => {
-  const calls: Array<{ url: string; method: string }> = []
+  const calls: Array<{ url: string; method: string; tokenRequest?: unknown }> = []
   const body = 'Ornn message\n<!-- ornn-effect:github-message:job_v1_a -->'
   const keys = await crypto.subtle.generateKey(
     {
@@ -18,7 +18,8 @@ test('GitHub message publisher creates, updates, and finds only the rendered eff
   const pkcs8PrivateKey = pem('PRIVATE KEY', new Uint8Array(await crypto.subtle.exportKey('pkcs8', keys.privateKey)))
   const privateKey = createPrivateKey(pkcs8PrivateKey).export({ format: 'pem', type: 'pkcs1' }).toString()
   const request = (async (input: URL | RequestInfo, init?: RequestInit) => {
-    calls.push({ url: String(input), method: init?.method ?? 'GET' })
+    calls.push({ url: String(input), method: init?.method ?? 'GET',
+      ...(String(input).includes('/access_tokens') ? { tokenRequest: JSON.parse(String(init?.body)) } : {}) })
     if (String(input).includes('/app/installations/159365588/access_tokens')) {
       const token = new Headers(init?.headers).get('authorization')?.slice('Bearer '.length)
       expect(token).toBeDefined()
@@ -33,7 +34,6 @@ test('GitHub message publisher creates, updates, and finds only the rendered eff
         arrayBuffer(base64UrlDecode(signature)),
         new TextEncoder().encode(`${header}.${payload}`),
       )).toBeTrue()
-      expect(JSON.parse(String(init?.body))).toEqual({ repository_ids: [1_296_836_371], permissions: { issues: 'write' } })
       return Response.json({ token: 'installation-token', expires_at: '2026-09-07T13:00:00.000Z' }, { status: 201 })
     }
     if (String(input).includes('/comments?')) return Response.json([{ id: 17, body }], { headers: { link: '' } })
@@ -45,7 +45,10 @@ test('GitHub message publisher creates, updates, and finds only the rendered eff
     appId: '12345',
     privateKey,
     installationId: '159365588',
-    repositoryId: '1296836371',
+    repositories: [
+      { id: '1296836371', fullName: 'bjesuiter/ornn-forge' },
+      { id: '930524684', fullName: 'bjesuiter/bgf-wlan-translation-v5' },
+    ],
   }, request)
 
   await expect(publisher.reconcile({ repository: 'bjesuiter/ornn-forge', issueNumber: 23, effectKey: 'github-message:job_v1_a', body }))
@@ -53,6 +56,11 @@ test('GitHub message publisher creates, updates, and finds only the rendered eff
   await expect(publisher.create({ repository: 'bjesuiter/ornn-forge', issueNumber: 23, effectKey: 'github-message:job_v1_a', body })).resolves.toEqual({ githubCommentId: '18' })
   await expect(publisher.update({ repository: 'bjesuiter/ornn-forge', githubCommentId: '17', effectKey: 'github-message:job_v1_a', body })).resolves.toBeUndefined()
   expect(calls.map((call) => call.method)).toEqual(['POST', 'GET', 'POST', 'PATCH'])
+  await publisher.create({ repository: 'bjesuiter/bgf-wlan-translation-v5', issueNumber: 1, effectKey: 'github-message:job_v1_b', body })
+  expect(calls[4]?.tokenRequest).toEqual({ repository_ids: [930_524_684], permissions: { issues: 'write' } })
+  expect(calls[0]?.tokenRequest).toEqual({ repository_ids: [1_296_836_371], permissions: { issues: 'write' } })
+  await expect(publisher.create({ repository: 'bjesuiter/not-allowed', issueNumber: 1, effectKey: 'github-message:job_v1_c', body })).rejects.toThrow('not configured')
+  expect(calls).toHaveLength(6)
 })
 
 function pem(label: string, der: Uint8Array): string {
