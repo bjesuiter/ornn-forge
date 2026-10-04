@@ -1,18 +1,14 @@
 import { envelope } from '@ornn-forge/protocol'
 import type { InvocationStore } from './control-plane'
 import { createGitHubRepositoryCheckout, type RepositoryCheckout } from './github-repository-checkout'
+import { githubAppCredentials } from './github-configuration'
 
 export async function offerNextLease(
   socket: Pick<WebSocket, 'send'>,
   store: Pick<InvocationStore, 'pollRunner' | 'recordLeaseCheckout' | 'releaseLease' | 'recordRunnerFault'>,
   runnerId: string,
   env: Cloudflare.Env,
-  resolveCheckout: (repository: string) => Promise<RepositoryCheckout> = createGitHubRepositoryCheckout({
-    appId: env.GITHUB_APP_ID,
-    privateKey: env.GITHUB_APP_PRIVATE_KEY,
-    installationId: env.GITHUB_APP_INSTALLATION_ID,
-    repositoryId: env.GITHUB_REPOSITORY_ID,
-  }).resolve,
+  resolveCheckout: (repository: string) => Promise<RepositoryCheckout> = createGitHubRepositoryCheckout(githubAppCredentials(env)).resolve,
 ): Promise<void> {
   const lease = await store.pollRunner?.(runnerId)
   if (!lease) return

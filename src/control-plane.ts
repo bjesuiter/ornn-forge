@@ -32,6 +32,7 @@ export type ControlPlaneOptions = {
   githubInstallationId: string
   githubRepositoryId: string
   githubRepositoryFullName?: string
+  githubAdditionalRepositories?: readonly { id: string; fullName: string }[]
   operatorBearerSecret: string
   runnerCredentialId?: string
   runnerCredentialSecret?: string
@@ -459,10 +460,13 @@ async function admitGitHubDelivery(
   if (!parsed) {
     return json({ apiVersion: API_VERSION, error: { code: 'invalid_payload' } }, 400)
   }
+  const primaryRepository = parsed.repositoryId === options.githubRepositoryId
+    && (options.githubRepositoryFullName === undefined || parsed.repositoryFullName === options.githubRepositoryFullName)
+  const additionalRepository = options.githubAdditionalRepositories?.some((repository) =>
+    parsed.repositoryId === repository.id && parsed.repositoryFullName === repository.fullName) ?? false
   if (
     parsed.installationId !== options.githubInstallationId ||
-    parsed.repositoryId !== options.githubRepositoryId ||
-    (options.githubRepositoryFullName !== undefined && parsed.repositoryFullName !== options.githubRepositoryFullName) ||
+    (!primaryRepository && !additionalRepository) ||
     parsed.actor !== 'bjesuiter'
   ) {
     return json({ apiVersion: API_VERSION, error: { code: 'invocation_unauthorized' } }, 403)

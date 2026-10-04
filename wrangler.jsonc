@@ -11,7 +11,8 @@
     "GITHUB_APP_INSTALLATION_ID": "159365588",
     "GITHUB_CLIENT_ID": "Iv23livaCskLFocJZnOQ",
     "GITHUB_REPOSITORY_ID": "1296836371",
-    "GITHUB_REPOSITORY_FULL_NAME": "bjesuiter/ornn-forge"
+    "GITHUB_REPOSITORY_FULL_NAME": "bjesuiter/ornn-forge",
+    "GITHUB_ADDITIONAL_REPOSITORIES": "[{\"id\":\"930524684\",\"fullName\":\"bjesuiter/bgf-wlan-translation-v5\"}]"
   },
   "d1_databases": [
     {

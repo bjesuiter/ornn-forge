@@ -4,22 +4,28 @@ export type GitHubAppCredentials = {
   appId: string
   privateKey: string
   installationId: string
-  repositoryId: string
+  repositories: readonly GitHubRepository[]
 }
+
+export type GitHubRepository = { id: string; fullName: string }
 
 export function createGitHubMessagePublisher(
   credentials: GitHubAppCredentials,
   request: typeof fetch = fetch,
 ): OrnnMessagePublisher {
-  let installationToken: Promise<{ token: string; expiresAt: string }> | undefined
-  const headers = async () => {
-    installationToken ??= createGitHubInstallationToken(credentials, { issues: 'write' }, request)
+  const installationTokens = new Map<string, Promise<{ token: string; expiresAt: string }>>()
+  const headers = async (repository: string) => {
+    let installationToken = installationTokens.get(repository)
+    if (!installationToken) {
+      installationToken = createGitHubInstallationToken(credentials, repository, { issues: 'write' }, request)
+      installationTokens.set(repository, installationToken)
+    }
     return githubHeaders((await installationToken).token)
   }
 
   return {
     async reconcile({ repository, issueNumber, effectKey, githubCommentId, body }) {
-      const authenticatedHeaders = await headers()
+      const authenticatedHeaders = await headers(repository)
       if (!githubCommentId) return findEffectComment(repository, issueNumber, effectKey, body, request, authenticatedHeaders)
       const response = await request(`https://api.github.com/repos/${repository}/issues/comments/${githubCommentId}`, { headers: authenticatedHeaders })
       if (response.status === 404) return undefined
@@ -30,7 +36,7 @@ export function createGitHubMessagePublisher(
         : undefined
     },
     async create({ repository, issueNumber, body }) {
-      const authenticatedHeaders = await headers()
+      const authenticatedHeaders = await headers(repository)
       const response = await request(`https://api.github.com/repos/${repository}/issues/${issueNumber}/comments`, {
         method: 'POST', headers: authenticatedHeaders, body: JSON.stringify({ body }),
       })
@@ -40,7 +46,7 @@ export function createGitHubMessagePublisher(
       return { githubCommentId: String(comment.id) }
     },
     async update({ repository, githubCommentId, body }) {
-      const authenticatedHeaders = await headers()
+      const authenticatedHeaders = await headers(repository)
       const response = await request(`https://api.github.com/repos/${repository}/issues/comments/${githubCommentId}`, {
         method: 'PATCH', headers: authenticatedHeaders, body: JSON.stringify({ body }),
       })
@@ -51,10 +57,13 @@ export function createGitHubMessagePublisher(
 
 export async function createGitHubInstallationToken(
   credentials: GitHubAppCredentials,
+  repository: string,
   permissions: Record<string, 'read' | 'write'>,
   request: typeof fetch = fetch,
 ): Promise<{ token: string; expiresAt: string }> {
-  const repositoryId = Number(credentials.repositoryId)
+  const allowed = credentials.repositories.find((entry) => entry.fullName === repository)
+  if (!allowed) throw new Error('GitHub repository is not configured')
+  const repositoryId = Number(allowed.id)
   if (!Number.isSafeInteger(repositoryId) || repositoryId <= 0) {
     throw new Error('GITHUB_REPOSITORY_ID must be a positive integer')
   }

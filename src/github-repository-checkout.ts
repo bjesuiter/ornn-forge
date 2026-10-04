@@ -12,7 +12,7 @@ export function createGitHubRepositoryCheckout(credentials: GitHubAppCredentials
   return {
     async resolve(repository: string): Promise<RepositoryCheckout> {
       if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) throw new Error('Repository must be owner/name')
-      const credential = await createGitHubInstallationToken(credentials, { contents: 'read' }, request)
+      const credential = await createGitHubInstallationToken(credentials, repository, { contents: 'read' }, request)
       const headers = githubHeaders(credential.token)
       const repositoryResponse = await request(`https://api.github.com/repos/${repository}`, { headers })
       if (!repositoryResponse.ok) throw new Error(`GitHub repository lookup failed: ${repositoryResponse.status}`)

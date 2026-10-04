@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers'
 import { envelope, isAnalysisArtifact, isRunnerCommandJournalEntry, isRunnerFault, isRunnerLeaseObservation, isRunnerSynchronization, parseRunnerEnvelope } from '@ornn-forge/protocol'
 import { createD1InvocationStore, publishJobMessage } from './control-plane'
 import { createGitHubMessagePublisher } from './github-message-publisher'
+import { githubAppCredentials } from './github-configuration'
 import { offerNextLease } from './lease-offer'
 
 type Attachment = { runnerId: string; instanceId?: string; synchronized: boolean }
@@ -78,12 +79,7 @@ export class RunnerConnection extends DurableObject<Cloudflare.Env> {
         ? await store.completeLease?.({ ...lease, artifact: parsed.value.payload.artifact, cleanupStatus: parsed.value.payload.cleanupStatus === 'failed' ? 'failed' : 'verified' })
         : undefined
       if (completed === 'accepted') await store.recordRunnerSuccess?.(state.runnerId)
-      if (completed === 'accepted' && lease) await publishJobMessage(store, createGitHubMessagePublisher({
-        appId: this.env.GITHUB_APP_ID,
-        privateKey: this.env.GITHUB_APP_PRIVATE_KEY,
-        installationId: this.env.GITHUB_APP_INSTALLATION_ID,
-        repositoryId: this.env.GITHUB_REPOSITORY_ID,
-      }), lease.jobId)
+      if (completed === 'accepted' && lease) await publishJobMessage(store, createGitHubMessagePublisher(githubAppCredentials(this.env)), lease.jobId)
       socket.send(JSON.stringify(envelope(completed === 'accepted' && lease ? 'lease.accepted' : 'lease.rejected', completed === 'accepted' && lease ? { jobId: lease.jobId } : {
         code: isAnalysisArtifact(parsed.value.payload.artifact) ? 'lease_invalid' : 'invalid_artifact',
       })))
