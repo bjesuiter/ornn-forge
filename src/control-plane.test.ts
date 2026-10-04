@@ -164,8 +164,23 @@ test('Force Quit is idempotent, fences a late result, and releases capacity only
   expect((await store.inspectJob(jobId))?.job.state).toBe('cancelled')
   expect((await store.inspectJob(jobId))?.cleanupStatus?.status).toBe('failed')
   expect((await store.inspectJob(jobId))?.events.map((event) => event.type)).toContain('job.force_quit_completed')
-  expect(await store.pendingRunnerCommands?.('runner_homeserv1')).toEqual([])
+  expect(await store.pendingRunnerCommands?.('runner_homeserv1')).toHaveLength(1)
   expect((await request()).status).toBe(409)
+  const next = issueComment()
+  next.comment.id = 124
+  const nextAdmission = await app.fetch(await signedWebhookRequest('delivery-after-force-quit', next))
+  const nextJob = await nextAdmission.json() as { jobId: string }
+  const failedInspection = await app.fetch(new Request(`https://ornn.example/api/v1/jobs/${jobId}`, {
+    headers: { authorization: `Bearer ${operatorSecret}` },
+  }))
+  expect(failedInspection.headers.get('cache-control')).toBe('no-store')
+  expect(await failedInspection.json()).toMatchObject({ executionOutcome: { status: 'cancelled' }, cleanupStatus: { status: 'failed' } })
+  expect(await store.pollRunner?.('runner_homeserv1')).toBeUndefined()
+  expect(await store.completeForceQuit?.({ runnerId: 'runner_homeserv1', commandId: commands![0].commandId, jobId, cleanupStatus: 'verified' })).toBe(true)
+  expect((await store.inspectJob(jobId))?.cleanupStatus?.status).toBe('verified')
+  expect((await store.inspectJob(jobId))?.executionOutcome?.status).toBe('cancelled')
+  expect(await store.pendingRunnerCommands?.('runner_homeserv1')).toEqual([])
+  expect((await store.pollRunner?.('runner_homeserv1'))?.jobId).toBe(nextJob.jobId)
 })
 
 test('issues independent, short-lived, one-time Setup tokens for Remote Runner enrollment', async () => {

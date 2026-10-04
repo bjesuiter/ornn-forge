@@ -14,6 +14,7 @@ test('Incus creates, discovers, executes, transfers, stops and verifies an owned
   let instance: IncusInstance | undefined
   const calls: string[] = []
   const gateway: IncusGateway = {
+    async volumeExists() { return false },
     async list() { return instance ? [instance] : [] },
     async launch(input) {
       calls.push('launch')
@@ -21,7 +22,7 @@ test('Incus creates, discovers, executes, transfers, stops and verifies an owned
       expect(input.config['limits.memory']).toBe(String(spec.resources.memoryBytes))
       expect(input.config['limits.processes']).toBe(String(spec.resources.pidsLimit))
       expect(input.config['security.privileged']).toBe('false')
-      instance = { name: input.name, status: 'Running', config: input.config }
+      instance = { name: input.name, status: 'Running', storagePool: 'pool', config: input.config }
     },
     async exec(name, request) { calls.push(`exec:${name}:${request.command.join(' ')}`); return { exitCode: 0, stdout: new TextEncoder().encode('ok'), stderr: new Uint8Array() } },
     async readFile(name, path) { calls.push(`read:${name}:${path}`); return new TextEncoder().encode('artifact') },
@@ -54,6 +55,7 @@ test('Incus rejects a foreign instance before any destructive call', async () =>
   const instance: IncusInstance = { name: 'foreign', status: 'Running', config: { 'user.ornn.managed': 'true', 'user.ornn.runner-id': 'another-runner' } }
   let changed = false
   const gateway: IncusGateway = {
+    async volumeExists() { return false },
     async list() { return [instance] },
     async launch() { changed = true }, async exec() { changed = true; throw new Error('not used') },
     async readFile() { changed = true; throw new Error('not used') }, async writeFile() { changed = true },
@@ -68,6 +70,7 @@ test('Incus rejects a foreign instance before any destructive call', async () =>
 
 test('Incus refuses a Docker-style start command and a mutable image reference', async () => {
   const gateway: IncusGateway = {
+    async volumeExists() { return false },
     async list() { return [] }, async launch() { throw new Error('not used') },
     async exec() { throw new Error('not used') }, async readFile() { throw new Error('not used') },
     async writeFile() {}, async stop() {}, async delete() {},
@@ -79,7 +82,8 @@ test('Incus refuses a Docker-style start command and a mutable image reference',
 
 test('Incus does not report cleanup when the instance remains listed', async () => {
   const gateway: IncusGateway = {
-    async list() { return [{ name: 'owned', status: 'Stopped', config: {
+    async volumeExists() { return false },
+    async list() { return [{ name: 'owned', status: 'Stopped', storagePool: 'pool', config: {
       'user.ornn.managed': 'true', 'user.ornn.runner-id': spec.runnerId, 'user.ornn.sandbox-id': spec.sandboxId,
       'user.ornn.generation': '1', 'user.ornn.spec-fingerprint': spec.specFingerprint,
     } }] },
@@ -88,6 +92,47 @@ test('Incus does not report cleanup when the instance remains listed', async () 
   }
   const driver = createIncusSandboxDriver({ gateway })
   await expect(driver.destroy({ ...spec, providerRef: 'owned', volumeIds: [] })).rejects.toMatchObject({ code: 'unavailable', operation: 'destroy', effect: 'unknown' })
+})
+
+test('Incus retains the root volume identity and refuses absence while storage remains or cannot be inspected', async () => {
+  let instance: IncusInstance | undefined
+  let volume = true
+  let unavailable = false
+  const gateway: IncusGateway = {
+    async list() { return instance ? [instance] : [] },
+    async volumeExists() { if (unavailable) throw new Error('offline'); return volume },
+    async launch(input) { instance = { name: input.name, status: 'Running', config: input.config, storagePool: 'pool' } },
+    async exec() { throw new Error('not used') }, async readFile() { throw new Error('not used') },
+    async writeFile() {}, async stop() {}, async delete() { instance = undefined },
+  }
+  const driver = createIncusSandboxDriver({ gateway })
+  const lease = await driver.create(spec, new AbortController().signal)
+  expect(lease.volumeIds).toEqual([`pool/container/${lease.providerRef}`])
+  expect((await driver.discover({ runnerId: spec.runnerId }))[0]?.volumeIds).toEqual(lease.volumeIds)
+  delete instance!.storagePool
+  await expect(driver.discover({ runnerId: spec.runnerId })).rejects.toMatchObject({ diagnosticRef: 'root-storage-pool-missing' })
+  instance!.storagePool = 'pool'
+  await expect(driver.destroy(lease)).rejects.toMatchObject({ diagnosticRef: 'root-volume-still-present' })
+  await expect(driver.inspect(lease)).rejects.toMatchObject({ diagnosticRef: 'root-volume-still-present' })
+  volume = false
+  unavailable = true
+  await expect(driver.destroy(lease)).rejects.toMatchObject({ code: 'unavailable', effect: 'none' })
+  unavailable = false
+  await driver.destroy(lease)
+  expect(await driver.inspect(lease)).toMatchObject({ state: 'absent' })
+})
+
+test('Incus CLI records the expanded root pool and checks only the exact container volume in its project', async () => {
+  const gateway = createIncusCliGateway({ project: 'user-996', run: async (args) => {
+    expect(args.slice(0, 2)).toEqual(['--project', 'user-996'])
+    const result = args[2] === 'list'
+      ? [{ name: 'owned', status: 'Running', expanded_devices: { root: { type: 'disk', path: '/', pool: 'zfs' } } }]
+      : [{ name: 'owned', type: 'custom' }, { name: 'peer', type: 'container' }]
+    return { exitCode: 0, stdout: new TextEncoder().encode(JSON.stringify(result)), stderr: new Uint8Array() }
+  } })
+  expect((await gateway.list())[0]?.storagePool).toBe('zfs')
+  expect(await gateway.volumeExists('zfs', 'owned')).toBe(false)
+  expect(await gateway.volumeExists('zfs', 'peer')).toBe(true)
 })
 
 test('Incus CLI keeps project flag outside exec command and gives pushed files private mode', async () => {

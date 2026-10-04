@@ -6,6 +6,7 @@ export type IncusInstance = {
   name: string
   status: string
   config: Record<string, string>
+  storagePool?: string
 }
 
 export interface IncusGateway {
@@ -16,6 +17,7 @@ export interface IncusGateway {
   writeFile(name: string, path: string, data: Uint8Array): Promise<void>
   stop(name: string): Promise<void>
   delete(name: string): Promise<void>
+  volumeExists(pool: string, name: string): Promise<boolean>
 }
 
 const prefix = 'user.ornn.'
@@ -41,6 +43,15 @@ export function createIncusSandboxDriver(options: { gateway: IncusGateway; now?:
     if (instance.status !== 'Running') throw new SandboxError('conflict', operation, 'none', 'instance-not-running')
   }
 
+  async function verifyStorageAbsent(lease: SandboxLease, operation: 'inspect' | 'destroy'): Promise<void> {
+    if (lease.volumeIds.length !== 1) throw new SandboxError('unavailable', operation, 'unknown', 'root-volume-identity-missing')
+    const [pool, type, name] = lease.volumeIds[0]!.split('/')
+    if (!pool || type !== 'container' || name !== lease.providerRef) throw conflict(operation)
+    if (await incus(operation, 'none', () => gateway.volumeExists(pool, name))) {
+      throw new SandboxError('unavailable', operation, 'unknown', 'root-volume-still-present')
+    }
+  }
+
   return {
     async create(spec, signal) {
       rejectAborted(signal, 'create')
@@ -52,7 +63,7 @@ export function createIncusSandboxDriver(options: { gateway: IncusGateway; now?:
       const current = await find(name, 'create')
       if (current) {
         if (!owns(current, spec)) throw conflict('create')
-        return leaseFrom(spec, name)
+        return leaseFrom(spec, current)
       }
       await incus('create', 'unknown', () => gateway.launch({
         name,
@@ -67,7 +78,7 @@ export function createIncusSandboxDriver(options: { gateway: IncusGateway; now?:
       const launched = await find(name, 'create')
       if (!launched) throw new SandboxError('unavailable', 'create', 'unknown', 'launched-instance-absent')
       if (!owns(launched, spec)) throw conflict('create')
-      return leaseFrom(spec, name)
+      return leaseFrom(spec, launched)
     },
 
     async discover(scope) {
@@ -81,7 +92,10 @@ export function createIncusSandboxDriver(options: { gateway: IncusGateway; now?:
 
     async inspect(lease) {
       const instance = await owned(lease, 'inspect')
-      if (!instance) return { state: 'absent', observedAt: now() }
+      if (!instance) {
+        await verifyStorageAbsent(lease, 'inspect')
+        return { state: 'absent', observedAt: now() }
+      }
       const phase = instance.status === 'Running' ? 'ready' : instance.status === 'Stopped' ? 'stopped' : 'faulted'
       return { state: 'present', phase, processes: phase === 'ready' ? 'running' : phase === 'stopped' ? 'stopped' : 'unknown', specFingerprint: lease.specFingerprint, observedAt: now() }
     },
@@ -129,6 +143,7 @@ export function createIncusSandboxDriver(options: { gateway: IncusGateway; now?:
       const instance = await owned(lease, 'destroy')
       if (instance) await incus('destroy', 'unknown', () => gateway.delete(lease.providerRef))
       if (await find(lease.providerRef, 'destroy')) throw new SandboxError('unavailable', 'destroy', 'unknown', 'owned-instance-still-present')
+      await verifyStorageAbsent(lease, 'destroy')
     },
   }
 }
@@ -158,18 +173,21 @@ function owns(instance: IncusInstance, lease: Pick<SandboxLease, 'runnerId' | 's
     && instance.config[`${prefix}spec-fingerprint`] === lease.specFingerprint
 }
 
-function leaseFrom(spec: SandboxSpec, providerRef: string): SandboxLease {
-  return { sandboxId: spec.sandboxId, generation: spec.generation, runnerId: spec.runnerId, providerRef, specFingerprint: spec.specFingerprint, createdAt: spec.createdAt, expiresAt: spec.expiresAt, volumeIds: [] }
+function leaseFrom(spec: SandboxSpec, instance: IncusInstance): SandboxLease {
+  const providerRef = instance.name
+  if (!instance.storagePool) throw new SandboxError('unavailable', 'create', 'unknown', 'root-storage-pool-missing')
+  return { sandboxId: spec.sandboxId, generation: spec.generation, runnerId: spec.runnerId, providerRef, specFingerprint: spec.specFingerprint, createdAt: spec.createdAt, expiresAt: spec.expiresAt, volumeIds: [`${instance.storagePool}/container/${providerRef}`] }
 }
 
 function leaseFromInstance(instance: IncusInstance): SandboxLease | undefined {
   const config = instance.config
   const generation = Number(config[`${prefix}generation`])
   if (!config[`${prefix}sandbox-id`] || !config[`${prefix}runner-id`] || !config[`${prefix}spec-fingerprint`] || !Number.isSafeInteger(generation) || generation < 1) return undefined
+  if (!instance.storagePool) throw new SandboxError('unavailable', 'discover', 'none', 'root-storage-pool-missing')
   return {
     sandboxId: config[`${prefix}sandbox-id`], runnerId: config[`${prefix}runner-id`], generation,
     providerRef: instance.name, specFingerprint: config[`${prefix}spec-fingerprint`],
-    createdAt: config[`${prefix}created-at`] ?? '', expiresAt: config[`${prefix}expires-at`] ?? '', volumeIds: [],
+    createdAt: config[`${prefix}created-at`] ?? '', expiresAt: config[`${prefix}expires-at`] ?? '', volumeIds: [`${instance.storagePool}/container/${instance.name}`],
   }
 }
 

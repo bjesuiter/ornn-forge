@@ -141,6 +141,25 @@ test('D1 persists Force Quit and delivers it through the Runner connection', asy
   }))
   const delivered = await command as { type: string; payload: { commandId: string; payload: { jobId: string } } }
   expect(delivered).toMatchObject({ type: 'runner.command', payload: { payload: { jobId } } })
+  const failed = nextMessage(socket)
+  socket.send(JSON.stringify(envelope('runner.force_quit_result', {
+    runnerId: forceQuitRunnerId, commandId: delivered.payload.commandId, jobId, cleanupStatus: 'failed',
+  })))
+  expect((await failed).type).toBe('runner.accepted')
+  expect(await store.pollRunner(forceQuitRunnerId)).toBeUndefined()
+  expect(await env.ORNN_D1.prepare('SELECT execution_status, cleanup_status FROM jobs WHERE job_id = ?')
+    .bind(jobId).first()).toMatchObject({ execution_status: 'cancelled', cleanup_status: 'failed' })
+  const cancelledAt = await env.ORNN_D1.prepare('SELECT execution_completed_at FROM jobs WHERE job_id = ?').bind(jobId).first()
+  expect(await env.ORNN_D1.prepare("SELECT COUNT(*) AS count FROM jobs j JOIN runner_leases l ON l.job_id = j.job_id WHERE l.runner_id = ? AND j.cleanup_status IS NOT 'verified'")
+    .bind(forceQuitRunnerId).first()).toEqual({ count: 1 })
+  expect(await store.pendingRunnerCommands(forceQuitRunnerId)).toHaveLength(1)
+  const heartbeat = nextMessage(socket)
+  const retry = nextMessage(socket, 'runner.command')
+  socket.send(JSON.stringify(envelope('runner.heartbeat', {
+    runnerId: forceQuitRunnerId, instanceId: 'instance_v1_forcequit0000000000000',
+  })))
+  expect((await heartbeat).type).toBe('runner.heartbeat.accepted')
+  expect(await retry).toEqual(delivered)
   const accepted = nextMessage(socket)
   socket.send(JSON.stringify(envelope('runner.force_quit_result', {
     runnerId: forceQuitRunnerId, commandId: delivered.payload.commandId, jobId, cleanupStatus: 'verified',
@@ -149,6 +168,13 @@ test('D1 persists Force Quit and delivers it through the Runner connection', asy
   expect(await env.ORNN_D1.prepare('SELECT execution_status, cleanup_status, force_quit_completed_at FROM jobs WHERE job_id = ?')
     .bind(jobId).first()).toMatchObject({ execution_status: 'cancelled', cleanup_status: 'verified', force_quit_completed_at: expect.any(String) })
   expect(await store.pendingRunnerCommands(forceQuitRunnerId)).toEqual([])
+  expect(await env.ORNN_D1.prepare('SELECT execution_completed_at FROM jobs WHERE job_id = ?').bind(jobId).first()).toEqual(cancelledAt)
+  expect(await env.ORNN_D1.prepare("SELECT COUNT(*) AS count FROM jobs j JOIN runner_leases l ON l.job_id = j.job_id WHERE l.runner_id = ? AND j.cleanup_status IS NOT 'verified'")
+    .bind(forceQuitRunnerId).first()).toEqual({ count: 0 })
+  expect(await store.completeForceQuit({ runnerId: forceQuitRunnerId, commandId: delivered.payload.commandId, jobId, cleanupStatus: 'verified' })).toBe(true)
+  expect(await store.completeForceQuit({ runnerId: forceQuitRunnerId, commandId: delivered.payload.commandId, jobId, cleanupStatus: 'failed' })).toBe(false)
+  expect((await env.ORNN_D1.prepare('SELECT event_type FROM domain_events WHERE stream_id = ? ORDER BY revision').bind(jobId)
+    .all<{ event_type: string }>()).results.map((event) => event.event_type)).toEqual(['job.force_quit_requested', 'job.force_quit_completed', 'job.cleanup_verified'])
   socket.close(1000, 'test complete')
 })
 
@@ -251,8 +277,16 @@ async function connect(worker: { fetch(request: Request): Promise<Response> }, i
   return socket
 }
 
-async function nextMessage(socket: WebSocket): Promise<{ type: string }> {
-  return new Promise((resolve) => socket.addEventListener('message', (event) => resolve(JSON.parse(String(event.data)))))
+async function nextMessage(socket: WebSocket, type?: string): Promise<{ type: string }> {
+  return new Promise((resolve) => {
+    const listener = (event: MessageEvent) => {
+      const message = JSON.parse(String(event.data))
+      if (type && message.type !== type) return
+      socket.removeEventListener('message', listener)
+      resolve(message)
+    }
+    socket.addEventListener('message', listener)
+  })
 }
 
 function lease(jobId: string) {

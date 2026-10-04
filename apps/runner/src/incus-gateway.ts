@@ -24,8 +24,17 @@ export function createIncusCliGateway(options: {
   return {
     async list() {
       const output = await required(timedRun(['list', '--format=json']))
-      const instances = JSON.parse(text(output.stdout)) as Array<{ name: string; status: string; config?: Record<string, string> }>
-      return instances.map((instance): IncusInstance => ({ name: instance.name, status: instance.status, config: instance.config ?? {} }))
+      const instances = JSON.parse(text(output.stdout)) as Array<{ name: string; status: string; config?: Record<string, string>; expanded_devices?: Record<string, Record<string, string>> }>
+      return instances.map((instance): IncusInstance => ({
+        name: instance.name, status: instance.status, config: instance.config ?? {},
+        storagePool: Object.values(instance.expanded_devices ?? {}).find((device) => device.type === 'disk' && device.path === '/')?.pool,
+      }))
+    },
+
+    async volumeExists(pool, name) {
+      const output = await required(timedRun(['storage', 'volume', 'list', pool, '--format=json']))
+      const volumes = JSON.parse(text(output.stdout)) as Array<{ name: string; type: string }>
+      return volumes.some((volume) => volume.type === 'container' && volume.name === name)
     },
 
     async launch(input, signal) {

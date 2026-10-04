@@ -1040,19 +1040,21 @@ export function createInMemoryInvocationStore(): InvocationStore {
       return { state: 'requested', runnerId: lease.runnerId }
     },
     async pendingRunnerCommands(runnerId) {
-      return [...forceQuitCommands.values()].filter((command) => command.runnerId === runnerId && !command.completed)
+      return [...forceQuitCommands.values()].filter((command) => command.runnerId === runnerId && inspectionsByJob.get(command.jobId)?.cleanupStatus?.status !== 'verified')
         .map(({ commandId, jobId, generation }) => ({ commandId, type: 'force_quit', payload: { jobId, generation } }))
     },
     async completeForceQuit(input) {
       const command = forceQuitCommands.get(input.jobId)
       const inspection = inspectionsByJob.get(input.jobId)
-      if (!command || !inspection || command.runnerId !== input.runnerId || command.commandId !== input.commandId || inspection.job.state !== 'force_quit_requested') return false
+      if (!command || !inspection || command.runnerId !== input.runnerId || command.commandId !== input.commandId || !['force_quit_requested', 'cancelled'].includes(inspection.job.state)) return false
+      const firstResult = !command.completed
+      if (inspection.cleanupStatus?.status === 'verified') return input.cleanupStatus === 'verified'
       command.completed = true
       const now = new Date().toISOString()
       inspection.job.state = 'cancelled'
-      inspection.executionOutcome = { status: 'cancelled', completedAt: now }
+      inspection.executionOutcome ??= { status: 'cancelled', completedAt: now }
       inspection.cleanupStatus = { status: input.cleanupStatus, updatedAt: now }
-      inspection.events.push({ id: opaqueId('evt'), type: 'job.force_quit_completed', revision: String(inspection.events.length + 1), occurredAt: now })
+      if (firstResult || input.cleanupStatus === 'verified') inspection.events.push({ id: opaqueId('evt'), type: firstResult ? 'job.force_quit_completed' : 'job.cleanup_verified', revision: String(inspection.events.length + 1), occurredAt: now })
       if (input.cleanupStatus === 'verified') leasesByJob.delete(input.jobId)
       return true
     },
@@ -1504,8 +1506,8 @@ class D1InvocationStore implements InvocationStore {
 
   async pendingRunnerCommands(runnerId: string): Promise<Array<{ commandId: string; type: string; payload: Record<string, unknown> }>> {
     const rows = await this.database.prepare(`SELECT c.command_id, c.command_type, c.payload_json FROM jobs j
-      INDEXED BY jobs_outstanding_command JOIN runner_commands c ON c.command_id = j.force_quit_command_id
-      WHERE j.force_quit_requested_at IS NOT NULL AND j.force_quit_completed_at IS NULL AND c.runner_id = ?
+      INDEXED BY jobs_unverified_reservation JOIN runner_commands c ON c.command_id = j.force_quit_command_id
+      WHERE j.cleanup_status IS NOT 'verified' AND j.force_quit_requested_at IS NOT NULL AND c.runner_id = ?
       ORDER BY c.created_at`).bind(runnerId).all<{ command_id: string; command_type: string; payload_json: string }>()
     return rows.results.map((row) => ({ commandId: row.command_id, type: row.command_type, payload: JSON.parse(row.payload_json) as Record<string, unknown> }))
   }
@@ -1540,21 +1542,29 @@ class D1InvocationStore implements InvocationStore {
   }
 
   async completeForceQuit(input: { runnerId: string; commandId: string; jobId: string; cleanupStatus: 'verified' | 'failed' }): Promise<boolean> {
+    const current = await this.database.prepare(`SELECT j.cleanup_status, j.force_quit_completed_at FROM jobs j
+      JOIN runner_commands c ON c.command_id = j.force_quit_command_id
+      WHERE j.job_id = ? AND c.command_id = ? AND c.runner_id = ? AND j.force_quit_requested_at IS NOT NULL`)
+      .bind(input.jobId, input.commandId, input.runnerId).first<{ cleanup_status: string; force_quit_completed_at: string | null }>()
+    if (!current) return false
+    if (current.cleanup_status === 'verified') return input.cleanupStatus === 'verified'
+    if (current.force_quit_completed_at && input.cleanupStatus === 'failed') return true
+    const eventType = current.force_quit_completed_at ? 'job.cleanup_verified' : 'job.force_quit_completed'
     const now = new Date().toISOString()
     const payload = canonicalJson({ jobId: input.jobId, cleanupStatus: input.cleanupStatus })
     const revision = await this.nextJobRevision(input.jobId)
     const result = await this.database.batch([
-      this.database.prepare(`UPDATE jobs SET execution_status = 'cancelled', execution_completed_at = ?, cleanup_status = ?, cleanup_updated_at = ?, force_quit_completed_at = ?
-        WHERE job_id = ? AND state = 'leased' AND force_quit_requested_at IS NOT NULL AND force_quit_completed_at IS NULL
+      this.database.prepare(`UPDATE jobs SET execution_status = 'cancelled', execution_completed_at = COALESCE(execution_completed_at, ?), cleanup_status = ?, cleanup_updated_at = ?, force_quit_completed_at = COALESCE(force_quit_completed_at, ?)
+        WHERE job_id = ? AND state = 'leased' AND force_quit_requested_at IS NOT NULL AND cleanup_status IS NOT 'verified'
         AND force_quit_command_id = ? AND EXISTS (SELECT 1 FROM runner_commands WHERE command_id = ? AND runner_id = ?)`)
         .bind(now, input.cleanupStatus, now, now, input.jobId, input.commandId, input.commandId, input.runnerId),
       this.database.prepare(`INSERT INTO domain_events (event_id, schema_version, stream_kind, stream_id, revision, event_type, payload_json, payload_sha256, created_at)
-        SELECT ?, ?, 'job', ?, ?, 'job.force_quit_completed', ?, ?, ? WHERE EXISTS
-        (SELECT 1 FROM jobs WHERE job_id = ? AND force_quit_command_id = ? AND force_quit_completed_at = ?)
-        AND NOT EXISTS (SELECT 1 FROM runner_command_journal WHERE runner_id = ? AND command_id = ? AND state = 'completed')`)
-        .bind(opaqueId('evt'), EVENT_SCHEMA_VERSION, input.jobId, revision, payload, await sha256(payload), now, input.jobId, input.commandId, now, input.runnerId, input.commandId),
+        SELECT ?, ?, 'job', ?, ?, ?, ?, ?, ? WHERE EXISTS
+        (SELECT 1 FROM jobs WHERE job_id = ? AND force_quit_command_id = ? AND cleanup_updated_at = ?)
+        AND NOT EXISTS (SELECT 1 FROM domain_events WHERE stream_id = ? AND event_type = ?)`)
+        .bind(opaqueId('evt'), EVENT_SCHEMA_VERSION, input.jobId, revision, eventType, payload, await sha256(payload), now, input.jobId, input.commandId, now, input.jobId, eventType),
       this.database.prepare(`INSERT INTO runner_command_journal (runner_id, command_id, state, reported_at)
-        SELECT ?, ?, 'completed', ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND force_quit_command_id = ? AND force_quit_completed_at = ?)
+        SELECT ?, ?, 'completed', ? WHERE EXISTS (SELECT 1 FROM jobs WHERE job_id = ? AND force_quit_command_id = ? AND cleanup_updated_at = ?)
         ON CONFLICT(runner_id, command_id) DO UPDATE SET state = 'completed', reported_at = excluded.reported_at`)
         .bind(input.runnerId, input.commandId, now, input.jobId, input.commandId, now),
     ])

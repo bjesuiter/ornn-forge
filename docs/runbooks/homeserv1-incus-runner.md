@@ -70,6 +70,31 @@ The post-reboot smoke for `ornn-zfs-probe-20261004132046` and `ornn-peer-probe-2
 
 The pinned checkout/Bun/artifact integration test then passed with six assertions in approximately 26 seconds. Both tests left the restricted project empty. The host-reboot network-isolation criterion in #24 now has live evidence; Force Quit and broader uncertain-cleanup/control-plane recovery remain separate acceptance work.
 
+## Force Quit and cleanup faults
+
+The Incus driver records the expanded root disk's exact pool/container/instance identity in the sandbox lease. It checks both instance absence and that exact root volume's absence before reporting verified cleanup. A missing identity or unavailable storage query keeps cleanup unresolved. The restricted account can list its project volumes on a known pool without permission to list or administer host pools. See [Incus storage-volume inspection](https://linuxcontainers.org/incus/docs/main/howto/storage_volumes/).
+
+After a failed Force Quit, the control plane preserves the cancelled execution outcome and its timestamp, exposes failed cleanup to Operator inspection, and retains the capacity reservation. The same Force Quit command remains pending until cleanup is verified. The existing 30-second Runner heartbeat redelivers it; a retry verifies current instance and storage absence without starting Job execution again. Duplicate reports do not create another execution outcome or duplicate terminal events. This is the narrow Force Quit retry path; the general recovery/reaper policy from ADR 0003 and #27 remains separate work.
+
+Run the live test only while the project is empty and the deployed Runner has no active leases. Use a checkout containing `force-quit.incus.integration.test.ts`; the verified run used a separate source copy at `/home/ornn-forge-incus/ornn-forcequit-probe-20261004`, leaving the service's checkout and control-plane pause setting unchanged.
+
+```sh
+ssh root.homeserv1 'cd /home/ornn-forge-incus/ornn-forcequit-probe-20261004 && runuser -u ornn-forge-incus -- env ORNN_INCUS_PROJECT=user-996 ORNN_INCUS_TEST_IMAGE=2685fc80ffd3b46fc197680eebd348c03a69bdf62aa0fac983ffe49e4a91418f /opt/ornn-forge/bun/bin/bun test apps/runner/src/force-quit.incus.integration.test.ts'
+bun run test:worker
+```
+
+The live test exercises `runRemoteRunner`'s production Force Quit handler and the real Incus CLI under the restricted service account. A disposable control socket supplies leases and repeated commands; no production Operator or Runner credential is used. Each Job starts a detached child that ignores TERM and writes a marker, then blocks in another sandbox command. Force Quit must remove the whole Job, suppress its normal result, retain local lease/storage records on failure, and remove them only after verified cleanup. A different Job under the same probe Runner identity remains running and executable. Four gateway faults model a rejected stop, rejected delete, a lost reply after a successful real delete, and unavailable storage inspection. Each fault occurs once, then the same command retries. Both containers explicitly use one CPU because the project allows only two CPUs in total. Probe control errors stop the test instead of reconnecting and repeating Job creation.
+
+On 2026-10-04, all five live tests passed in approximately 66 seconds with 62 assertions. The ordinary case reported `verified`; all four faults reported `failed` followed by `verified`. The Job instance names were `ornn-8bb79f5245e2d65a031a7c79d2a3eb7c62c7319d`, `ornn-20368894e0b1b05f8161951cb5719a184595af7b`, `ornn-6b592f3cdb0cd224b4857fe2bedc4c820c16ad17`, `ornn-0175070ebebcd5e44b1983b5a8f84a05d647531f`, and `ornn-3ad0c44d7d06b12ed57a8a34c16fa3e3291ac14c`. A subsequent root inspection found no project instance, Incus volume, live Job dataset, or deleted Job dataset. The ZFS pool remained healthy and the deployed Runner active with zero local leases/sandbox records.
+
+An additional ordinary Force Quit probe passed with 11 assertions after explicitly checking that the exact root volume was present before cancellation and absent afterward. Discovery also refuses an owned instance with an unknown root pool instead of silently hiding it.
+
+The first test setup accidentally requested the profile's two CPUs for each of two containers. Its reconnect loop repeatedly retried the rejected creation and overloaded Incus with requests, producing transaction timeouts. The test process was stopped and its exact owned peer removed; Incus recovered without a daemon restart. Explicit one-CPU probe limits and immediate termination on control errors fixed the test setup before the successful run.
+
+Separately, all seven real D1/Worker WebSocket tests passed. The Force Quit test reports failed cleanup, proves the reservation remains occupied, observes command redelivery on a heartbeat, then reports verified cleanup and proves the reservation is released. It also checks preserved cancellation timestamps, duplicate/stale report handling, and one ordered request/completion/cleanup event sequence. The authenticated Operator API test shows cancelled execution and failed cleanup, fences late results, blocks a second pending Job, and permits it only after verified cleanup. Existing dashboard SQL tests retain failed-cleanup Jobs in Operator views. All 90 local tests passed, with six live Incus tests skipped locally, and TypeScript checks passed.
+
+These are complementary live Incus and real D1 protocol tests. They do not claim an end-to-end production Operator/API cancellation, a production control-plane deployment of these changes, or the full restart/publication recovery smoke required by #27.
+
 ## Roll back the root storage profile
 
 With the Runner stopped and its Job project and lease ledger empty, restore the saved profile:
