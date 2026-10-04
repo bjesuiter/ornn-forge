@@ -93,7 +93,15 @@ The first test setup accidentally requested the profile's two CPUs for each of t
 
 Separately, all seven real D1/Worker WebSocket tests passed. The Force Quit test reports failed cleanup, proves the reservation remains occupied, observes command redelivery on a heartbeat, then reports verified cleanup and proves the reservation is released. It also checks preserved cancellation timestamps, duplicate/stale report handling, and one ordered request/completion/cleanup event sequence. The authenticated Operator API test shows cancelled execution and failed cleanup, fences late results, blocks a second pending Job, and permits it only after verified cleanup. Existing dashboard SQL tests retain failed-cleanup Jobs in Operator views. All 90 local tests passed, with six live Incus tests skipped locally, and TypeScript checks passed.
 
-These are complementary live Incus and real D1 protocol tests. They do not claim an end-to-end production Operator/API cancellation, a production control-plane deployment of these changes, or the full restart/publication recovery smoke required by #27.
+These are complementary live Incus and real D1 protocol tests. They do not claim an end-to-end production Operator/API cancellation or the full restart/publication recovery smoke required by #27. The initial evidence above preceded deployment; the rollout below verifies the deployed code.
+
+### Production rollout on 2026-10-04
+
+Implementation commit `1adfc8f3779d45eaee0c1de3b281a2def03bcc03` was pushed and deployed through `bun run deploy`. No D1 migrations were pending. The production Worker version is `b71829e6-bd89-4b7a-9f87-2f9d50554377` at `https://ornn-forge.bjesuiter.workers.dev`.
+
+The idle Incus service checkout received the committed gateway, driver, and tests. The unchanged coordinator's SHA-256 matched the committed source. The service was stopped for replacement, its old driver/gateway were saved at `/var/lib/ornn-incus-runner/source-before-1adfc8f.tar`, and it restarted as PID 65959 with zero service restarts. A freshly recreated synchronization marker records `2026-10-04T16:18:17.717Z`. Deployed gateway/driver SHA-256 hashes matched the local committed files. Runner credentials and its control-plane pause setting were preserved.
+
+Read-only production D1 inspection confirmed the Incus Runner was `ready`, its presence advanced to `2026-10-04T16:18:47.843Z`, and it held zero capacity reservations. All five Force Quit/fault tests then passed from `/home/ornn-forge-incus/ornn-forge`, the deployed service checkout, with 67 assertions in approximately 70 seconds. The pinned checkout/Bun/artifact test also passed with six assertions in approximately 26 seconds. The Force Quit tests still use a disposable control socket; the service's fresh synchronization and production D1 presence independently verify its deployed production connection.
 
 ## Roll back the root storage profile
 
