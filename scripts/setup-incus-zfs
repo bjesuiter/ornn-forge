@@ -21,6 +21,15 @@ trap 'systemctl start "$service"' EXIT
 jq -e '(.activeLeases | length) == 0 and (.sandboxes | length) == 0' "$state" >/dev/null
 [[ $(incus list --project "$project" --format=json | jq length) == 0 ]]
 
+certificate=$(incus config trust list --format=json | jq -ce '.[] | select(.name == "incus-user-996")')
+fingerprint=$(printf '%s' "$certificate" | jq -r '.fingerprint')
+[[ $fingerprint =~ ^[a-f0-9]{64}$ ]]
+# A missing persisted project grant can leave an active Runner unable to recover.
+printf '%s' "$certificate" | jq --arg project "$project" \
+  '{name, type, certificate, description, restricted: true, projects: [$project]}' \
+  | incus config trust edit "$fingerprint"
+runuser -u ornn-forge-incus -- incus list --project "$project" --format=json >/dev/null
+
 backup=/var/lib/ornn-incus-runner/profile-before-zfs.yaml
 if [[ ! -e $backup ]]; then
   incus profile show default --project "$project" > "$backup"

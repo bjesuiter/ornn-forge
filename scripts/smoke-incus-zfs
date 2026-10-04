@@ -54,6 +54,13 @@ cleanup() {
 }
 trap cleanup EXIT
 systemctl is-active --quiet "$service"
+incus config trust list --format=json | jq -e --arg project "$project" \
+  '[.[] | select(.name == "incus-user-996")] | length == 1 and .[0].restricted == true and .[0].projects == [$project]' >/dev/null
+if runuser -u ornn-forge-incus -- incus list --project default --format=json >"$work/default-project.log" 2>&1; then
+  echo 'FAIL: Runner account can access the default Incus project' >&2; exit 1
+fi
+grep -q 'User does not have permissions for project' "$work/default-project.log"
+echo 'PASS: persisted Incus trust grants only the restricted Job project'
 assert_idle
 old_pid=$(systemctl show "$service" -p MainPID --value)
 systemctl stop "$service"
